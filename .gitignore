@@ -1,0 +1,17 @@
+# Node modules
+node_modules/
+
+# Expo / React Native / build artifacts
+.expo/
+.expo-shared/
+web-build/
+ios/build/
+android/build/
+
+# Environment files
+.env*
+.env.local
+
+# Logs and system files
+*.log
+.DS_Store
