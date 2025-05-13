@@ -7,6 +7,7 @@ export type RootStackParamList = {
   Chat: undefined;
   Projects: undefined;
   Tasks: { projectId: string; projectTitle: string };
+  Assets: undefined;
 };
 
 // Convenience type for screen props

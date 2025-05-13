@@ -8,11 +8,15 @@ import {
   ScrollView,
   SafeAreaView,
   Alert,
+  KeyboardAvoidingView,
+  Platform,
+  StatusBar,
 } from 'react-native';
 import axios from 'axios';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../navigation/types';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 // Define the navigation prop type
 type OnboardingScreenNavigationProp = NativeStackNavigationProp<
@@ -32,6 +36,8 @@ const OnboardingScreen: React.FC = () => {
 
   // Explicitly type the navigation
   const navigation = useNavigation<OnboardingScreenNavigationProp>();
+
+  const insets = useSafeAreaInsets();
 
   const validateEmail = (email: string) => {
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
@@ -253,37 +259,42 @@ const OnboardingScreen: React.FC = () => {
   };
 
   return (
-    <SafeAreaView style={styles.container}>
-      <ScrollView contentContainerStyle={styles.scrollContent}>
-        {renderStep()}
-      </ScrollView>
-      
-      <View style={styles.footer}>
-        <View style={styles.progressDots}>
-          {[0, 1, 2, 3, 4].map(step => (
-            <View
-              key={step}
-              style={[
-                styles.dot,
-                currentStep === step && styles.activeDot,
-              ]}
-            />
-          ))}
-        </View>
-        
-        <View style={styles.navigationButtons}>
-          {currentStep > 0 && (
-            <TouchableOpacity style={styles.navButton} onPress={handleBack}>
-              <Text style={styles.navButtonText}>Back</Text>
+    <SafeAreaView style={{ flex: 1, paddingTop: insets.top, paddingBottom: 0, backgroundColor: '#121212' }}>
+      <StatusBar barStyle="light-content" translucent={true} />
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={0}
+      >
+        <ScrollView contentContainerStyle={{ flexGrow: 1, paddingBottom: 76 + insets.bottom }}>
+          {renderStep()}
+        </ScrollView>
+        <View style={[styles.footer, { paddingBottom: insets.bottom }]}>
+          <View style={styles.progressDots}>
+            {[0, 1, 2, 3, 4].map(step => (
+              <View
+                key={step}
+                style={[
+                  styles.dot,
+                  currentStep === step && styles.activeDot,
+                ]}
+              />
+            ))}
+          </View>
+          <View style={styles.navigationButtons}>
+            {currentStep > 0 && (
+              <TouchableOpacity style={styles.navButton} onPress={handleBack}>
+                <Text style={styles.navButtonText}>Back</Text>
+              </TouchableOpacity>
+            )}
+            <TouchableOpacity style={styles.navButton} onPress={handleNext}>
+              <Text style={styles.navButtonText}>
+                {currentStep === 4 ? 'Finish' : 'Next'}
+              </Text>
             </TouchableOpacity>
-          )}
-          <TouchableOpacity style={styles.navButton} onPress={handleNext}>
-            <Text style={styles.navButtonText}>
-              {currentStep === 4 ? 'Finish' : 'Next'}
-            </Text>
-          </TouchableOpacity>
+          </View>
         </View>
-      </View>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 };

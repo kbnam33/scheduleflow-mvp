@@ -1,9 +1,9 @@
-import { OpenAIApi, Configuration } from 'openai';
+import OpenAI from 'openai';
 
 export function getOpenAIClient() {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error('OPENAI_API_KEY is not set in environment variables');
-  return new OpenAIApi(new Configuration({ apiKey }));
+  return new OpenAI({ apiKey });
 }
 
 // SOP Prompt Templates
@@ -15,5 +15,6 @@ export const SOP_PROMPTS = {
   assetPrep: `You are an expert project coordinator. Given a project or meeting context, list the filenames or URLs of all files/assets the user should prepare next. Output a JSON array of objects with filename and (optional) url fields.`,
   chatDrivenHelpers: `You are an AI assistant for productivity, scheduling, and project management. Be concise, helpful, and context-aware.`,
   errorFallback: `I'm sorry, I couldn't process your request right now. Please try again or ask something else.`,
+  emailReplyArrival: `A client has replied to your email. Suggest the next best follow-up action or response in a single concise sentence.`,
   // Add more templates as needed
 }; 

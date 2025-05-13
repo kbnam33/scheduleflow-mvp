@@ -9,24 +9,24 @@ import {
   Animated,
   Easing,
   SafeAreaView,
+  KeyboardAvoidingView,
+  Platform,
+  StatusBar,
 } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { RootStackParamList } from '../navigation/types';
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-type RootStackParamList = {
-  Home: undefined;
-  Calendar: undefined;
-  Chat: undefined;
-  Tasks: undefined;
-};
-
-type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
+type NavigationProp = NativeStackNavigationProp<RootStackParamList, 'Chat'>;
 
 const ChatScreen = () => {
   const navigation = useNavigation<NavigationProp>();
+  const route = useRoute();
+  const insets = useSafeAreaInsets();
   const [messages, setMessages] = useState<any[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(true);
@@ -126,79 +126,78 @@ const ChatScreen = () => {
   );
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <View style={styles.container}>
-        <View style={styles.header}>
-          <Text style={styles.headerTitle}>Chat</Text>
-          <TouchableOpacity style={styles.addButton}>
-            <MaterialCommunityIcons name="plus" size={24} color="#e6ecec" />
-          </TouchableOpacity>
-        </View>
-
-        <FlatList
-          data={messages}
-          renderItem={renderMessage}
-          keyExtractor={(item) => item.id.toString()}
-          contentContainerStyle={styles.messagesList}
-        />
-
-        <View style={styles.inputContainer}>
-          <TouchableOpacity style={styles.micButton}>
-            <MaterialCommunityIcons name="microphone" size={20} color="#bfc6c9" />
-          </TouchableOpacity>
-          <TextInput
-            style={styles.input}
-            placeholder="Type a message..."
-            placeholderTextColor="#666"
-            value={input}
-            onChangeText={setInput}
-            onSubmitEditing={sendMessage}
-          />
-          <TouchableOpacity style={styles.sendButton} onPress={sendMessage}>
-            <MaterialCommunityIcons name="send" size={20} color="#bfc6c9" />
-          </TouchableOpacity>
-        </View>
-
-        {loadingReply && (
-          <View style={[styles.messageContainer, styles.assistantMessageContainer]}>
-            <View style={[styles.messageBubble, styles.assistantMessageBubble]}>
-              <Text style={styles.messageText}>...</Text>
-            </View>
+    <SafeAreaView style={{ flex: 1, paddingTop: insets.top, paddingBottom: 0, backgroundColor: '#121212' }}>
+      <StatusBar barStyle="light-content" translucent={true} />
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={0}
+      >
+        <View style={[styles.container, { paddingBottom: 76 + insets.bottom }]}>
+          <View style={styles.header}>
+            <Text style={styles.headerTitle}>Chat</Text>
           </View>
-        )}
-      </View>
-
-      {/* Bottom Navigation */}
-      <View style={styles.bottomNav}>
-        <TouchableOpacity 
-          style={styles.navItem}
-          onPress={() => navigation.navigate('Home')}
-        >
-          <MaterialCommunityIcons name="home" size={24} color="#bfc6c9" />
-          <Text style={styles.navLabel}>Home</Text>
-        </TouchableOpacity>
-        <TouchableOpacity 
-          style={styles.navItem}
-          onPress={() => navigation.navigate('Calendar')}
-        >
-          <MaterialCommunityIcons name="calendar" size={24} color="#bfc6c9" />
-          <Text style={styles.navLabel}>Calendar</Text>
-        </TouchableOpacity>
-        <TouchableOpacity 
-          style={styles.navItemActive}
-          onPress={() => navigation.navigate('Chat')}
-        >
-          <MaterialCommunityIcons name="chat" size={24} color="#e6ecec" />
-          <Text style={styles.navLabelActive}>Chat</Text>
-        </TouchableOpacity>
-        <TouchableOpacity 
-          style={styles.navItem}
-          onPress={() => navigation.navigate('Tasks')}
-        >
-          <MaterialCommunityIcons name="file-document-outline" size={24} color="#bfc6c9" />
-          <Text style={styles.navLabel}>Tasks</Text>
-        </TouchableOpacity>
-      </View>
+          <FlatList
+            data={messages}
+            renderItem={renderMessage}
+            keyExtractor={(item) => item.id.toString()}
+            contentContainerStyle={[styles.messagesList, { paddingBottom: 100 }]}
+          />
+          <View style={styles.inputContainer}>
+            <TouchableOpacity style={styles.micButton}>
+              <MaterialCommunityIcons name="microphone" size={20} color="#bfc6c9" />
+            </TouchableOpacity>
+            <TextInput
+              style={styles.input}
+              placeholder="Type a message..."
+              placeholderTextColor="#666"
+              value={input}
+              onChangeText={setInput}
+              onSubmitEditing={sendMessage}
+            />
+            <TouchableOpacity style={styles.sendButton} onPress={sendMessage}>
+              <MaterialCommunityIcons name="send" size={20} color="#bfc6c9" />
+            </TouchableOpacity>
+          </View>
+          {loadingReply && (
+            <View style={[styles.messageContainer, styles.assistantMessageContainer]}>
+              <View style={[styles.messageBubble, styles.assistantMessageBubble]}>
+                <Text style={styles.messageText}>...</Text>
+              </View>
+            </View>
+          )}
+        </View>
+        <View style={[styles.bottomNav, { paddingBottom: insets.bottom + 10 }]}>
+          <TouchableOpacity 
+            style={route.name === 'Home' ? styles.navItemActive : styles.navItem}
+            onPress={() => navigation.navigate('Home')}
+          >
+            <MaterialCommunityIcons name="home" size={24} color={route.name === 'Home' ? '#FFFFFF' : '#B0B0B0'} />
+            <Text style={route.name === 'Home' ? styles.navLabelActive : styles.navLabel}>Home</Text>
+          </TouchableOpacity>
+          <TouchableOpacity 
+            style={route.name === 'Calendar' ? styles.navItemActive : styles.navItem}
+            onPress={() => navigation.navigate('Calendar')}
+          >
+            <MaterialCommunityIcons name="calendar" size={24} color={route.name === 'Calendar' ? '#FFFFFF' : '#B0B0B0'} />
+            <Text style={route.name === 'Calendar' ? styles.navLabelActive : styles.navLabel}>Calendar</Text>
+          </TouchableOpacity>
+          <TouchableOpacity 
+            style={route.name === 'Chat' ? styles.navItemActive : styles.navItem}
+            onPress={() => navigation.navigate('Chat')}
+          >
+            <MaterialCommunityIcons name="chat" size={24} color={route.name === 'Chat' ? '#FFFFFF' : '#B0B0B0'} />
+            <Text style={route.name === 'Chat' ? styles.navLabelActive : styles.navLabel}>Chat</Text>
+          </TouchableOpacity>
+          <TouchableOpacity 
+            style={route.name === 'Tasks' ? styles.navItemActive : styles.navItem}
+            onPress={() => navigation.navigate('Tasks')}
+          >
+            <MaterialCommunityIcons name="file-document-outline" size={24} color={route.name === 'Tasks' ? '#FFFFFF' : '#B0B0B0'} />
+            <Text style={route.name === 'Tasks' ? styles.navLabelActive : styles.navLabel}>Tasks</Text>
+          </TouchableOpacity>
+        </View>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 };
@@ -224,14 +223,6 @@ const styles = StyleSheet.create({
     color: '#e6ecec',
     fontSize: 24,
     fontWeight: 'bold',
-  },
-  addButton: {
-    backgroundColor: '#181818',
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   messagesList: {
     paddingHorizontal: 20,
@@ -310,6 +301,9 @@ const styles = StyleSheet.create({
   },
   navItemActive: {
     alignItems: 'center',
+    backgroundColor: '#1E1E1E',
+    padding: 8,
+    borderRadius: 12,
     opacity: 1,
   },
   navLabel: {

@@ -8,10 +8,21 @@ import {
   Animated,
   ActivityIndicator,
   SafeAreaView,
+  KeyboardAvoidingView,
+  Platform,
+  StatusBar,
 } from 'react-native';
 import axios from 'axios';
+import { useNavigation, useRoute } from '@react-navigation/native';
+import { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { RootStackParamList } from '../navigation/types';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 
-const ProjectsScreen = ({ navigation }: any) => {
+const ProjectsScreen = () => {
+  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList, 'Projects'>>();
+  const route = useRoute();
+  const insets = useSafeAreaInsets();
   const [projects, setProjects] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [progressAnims, setProgressAnims] = useState<any>({});
@@ -53,11 +64,10 @@ const ProjectsScreen = ({ navigation }: any) => {
           <Text style={styles.title}>{item.title}</Text>
           <View style={{ flex: 1 }} />
           <View style={styles.phaseBadge}>
-            <Text style={styles.phaseText}>Phase: {item.phase}</Text>
+            <Text style={styles.phaseText}>{item.phase}</Text>
           </View>
         </View>
         <Text style={styles.dueDate}>Due: {item.dueDate}</Text>
-        <View style={styles.divider} />
         <View style={styles.progressRow}>
           <Text style={styles.progressLabel}>Tasks completed</Text>
           <View style={{ flex: 1 }} />
@@ -76,47 +86,73 @@ const ProjectsScreen = ({ navigation }: any) => {
   };
 
   return (
-    <SafeAreaView style={styles.container}>
-      {/* Header */}
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()}>
-          <Text style={styles.headerBack}>{'<'}</Text>
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>Projects</Text>
-        <View style={{ flex: 1 }} />
-        <TouchableOpacity>
-          <Text style={styles.headerMenu}>⋮</Text>
-        </TouchableOpacity>
-      </View>
-      {loading ? (
-        <ActivityIndicator color="#6ee7b7" style={{ marginTop: 40 }} />
-      ) : (
-        <FlatList
-          data={projects}
-          renderItem={renderProject}
-          keyExtractor={item => item.id}
-          contentContainerStyle={{ padding: 20, paddingBottom: 80 }}
-        />
-      )}
-      {/* Bottom nav */}
-      <View style={styles.bottomNav}>
-        <TouchableOpacity style={styles.navItem} onPress={() => navigation.navigate('Home')}>
-          <Text style={styles.icon}>🏠</Text>
-          <Text style={styles.navLabel}>Home</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.navItem} onPress={() => navigation.navigate('Calendar')}>
-          <Text style={styles.icon}>📅</Text>
-          <Text style={styles.navLabel}>Calendar</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.navItem} onPress={() => navigation.navigate('Chat')}>
-          <Text style={styles.icon}>💬</Text>
-          <Text style={styles.navLabel}>Chat</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.navItemActive}>
-          <Text style={styles.icon}>🗂️</Text>
-          <Text style={styles.navLabelActive}>Projects</Text>
-        </TouchableOpacity>
-      </View>
+    <SafeAreaView style={{ flex: 1, paddingTop: insets.top, paddingBottom: 0, backgroundColor: '#0B0F11' }}>
+      <StatusBar barStyle="light-content" translucent={true} />
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={0}
+      >
+        <View style={[styles.container, { paddingBottom: 76 + insets.bottom }]}>
+          {/* Header */}
+          <View style={styles.header}>
+            <TouchableOpacity onPress={() => navigation.goBack()}>
+              <Text style={styles.headerBack}>{'<'}</Text>
+            </TouchableOpacity>
+            <Text style={styles.headerTitle}>Projects</Text>
+            <View style={{ flex: 1 }} />
+            <TouchableOpacity>
+              <Text style={styles.headerMenu}>⋮</Text>
+            </TouchableOpacity>
+          </View>
+          {loading ? (
+            <ActivityIndicator color="#6ee7b7" style={{ marginTop: 40 }} />
+          ) : (
+            <FlatList
+              data={projects}
+              renderItem={renderProject}
+              keyExtractor={item => item.id}
+              contentContainerStyle={{ padding: 20, paddingBottom: 80 }}
+            />
+          )}
+          <View style={styles.fab}>
+            <TouchableOpacity style={styles.addButton}>
+              <Text style={styles.addButtonIcon}>+</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+        {/* Bottom Navigation */}
+        <View style={[styles.bottomNav, { paddingBottom: insets.bottom + 10 }]}>
+          <TouchableOpacity 
+            style={route.name === 'Home' ? styles.navItemActive : styles.navItem}
+            onPress={() => navigation.navigate('Home')}
+          >
+            <MaterialCommunityIcons name="home" size={24} color={route.name === 'Home' ? '#FFFFFF' : '#B0B0B0'} />
+            <Text style={route.name === 'Home' ? styles.navLabelActive : styles.navLabel}>Home</Text>
+          </TouchableOpacity>
+          <TouchableOpacity 
+            style={route.name === 'Calendar' ? styles.navItemActive : styles.navItem}
+            onPress={() => navigation.navigate('Calendar')}
+          >
+            <MaterialCommunityIcons name="calendar" size={24} color={route.name === 'Calendar' ? '#FFFFFF' : '#B0B0B0'} />
+            <Text style={route.name === 'Calendar' ? styles.navLabelActive : styles.navLabel}>Calendar</Text>
+          </TouchableOpacity>
+          <TouchableOpacity 
+            style={route.name === 'Chat' ? styles.navItemActive : styles.navItem}
+            onPress={() => navigation.navigate('Chat')}
+          >
+            <MaterialCommunityIcons name="chat" size={24} color={route.name === 'Chat' ? '#FFFFFF' : '#B0B0B0'} />
+            <Text style={route.name === 'Chat' ? styles.navLabelActive : styles.navLabel}>Chat</Text>
+          </TouchableOpacity>
+          <TouchableOpacity 
+            style={route.name === 'Projects' ? styles.navItemActive : styles.navItem}
+            onPress={() => navigation.navigate('Projects')}
+          >
+            <MaterialCommunityIcons name="folder" size={24} color={route.name === 'Projects' ? '#FFFFFF' : '#B0B0B0'} />
+            <Text style={route.name === 'Projects' ? styles.navLabelActive : styles.navLabel}>Projects</Text>
+          </TouchableOpacity>
+        </View>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 };
@@ -235,11 +271,17 @@ const styles = StyleSheet.create({
   },
   navItemActive: {
     alignItems: 'center',
-    opacity: 1,
+    backgroundColor: '#1E1E1E',
+    padding: 8,
+    borderRadius: 12,
   },
   icon: {
     fontSize: 20,
     color: '#bfc6c9',
+  },
+  iconActive: {
+    fontSize: 20,
+    color: '#e6ecec',
   },
   navLabel: {
     color: '#bfc6c9',
@@ -251,6 +293,27 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginTop: 2,
     fontWeight: 'bold',
+  },
+  fab: {
+    position: 'absolute',
+    bottom: 20,
+    right: 20,
+    backgroundColor: '#7CB8FF',
+    borderRadius: 20,
+    width: 40,
+    height: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  addButton: {
+    width: '100%',
+    height: '100%',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  addButtonIcon: {
+    fontSize: 20,
+    color: '#0B0F11',
   },
 });
 

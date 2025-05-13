@@ -1,5 +1,5 @@
 import React from 'react';
-import { NavigationContainer } from '@react-navigation/native';
+import { NavigationContainer, DefaultTheme } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { RootStackParamList } from './types';
 import OnboardingScreen from '../screens/onboarding';
@@ -8,12 +8,14 @@ import CalendarScreen from '../screens/calendar';
 import ChatScreen from '../screens/chat';
 import ProjectsScreen from '../screens/Projects';
 import TasksScreen from '../screens/Tasks';
+import AssetsScreen from '../screens/Assets';
+// import CustomTabBar from '../components/CustomTabBar';
 
-const Stack = createNativeStackNavigator<RootStackParamList>();
+const Stack = createNativeStackNavigator();
 
 const AppNavigator = () => {
   return (
-    <NavigationContainer>
+    <NavigationContainer theme={{...DefaultTheme, colors: {...DefaultTheme.colors, background: '#121212'}}}>
       <Stack.Navigator
         id={undefined}
         screenOptions={{
@@ -26,7 +28,9 @@ const AppNavigator = () => {
         <Stack.Screen name="Chat" component={ChatScreen} />
         <Stack.Screen name="Projects" component={ProjectsScreen} />
         <Stack.Screen name="Tasks" component={TasksScreen} />
+        <Stack.Screen name="Assets" component={AssetsScreen} />
       </Stack.Navigator>
+      {/* <CustomTabBar /> */}
     </NavigationContainer>
   );
 };

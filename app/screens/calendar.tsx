@@ -11,20 +11,15 @@ import {
   Platform,
   SafeAreaView,
   ActivityIndicator,
+  KeyboardAvoidingView,
+  StatusBar,
 } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { RootStackParamList } from '../navigation/types';
 import axios from 'axios';
-
-type RootStackParamList = {
-  Home: undefined;
-  Calendar: undefined;
-  Chat: undefined;
-  Tasks: undefined;
-};
-
-type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 if (Platform.OS === 'android') {
   if (UIManager.setLayoutAnimationEnabledExperimental) {
@@ -33,7 +28,9 @@ if (Platform.OS === 'android') {
 }
 
 const CalendarScreen = () => {
-  const navigation = useNavigation<NavigationProp>();
+  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList, 'Calendar'>>();
+  const route = useRoute();
+  const insets = useSafeAreaInsets();
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [events, setEvents] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -43,6 +40,10 @@ const CalendarScreen = () => {
   const [toast, setToast] = useState(null);
   const userId = 'test-user';
   const meetingId = 'meeting-123'; // Replace with real meeting id
+
+  // Get current route name for active state
+  const navState = navigation.getState && navigation.getState();
+  const routeName = navState && navState.routes && navState.index !== undefined ? navState.routes[navState.index].name : 'Calendar';
 
   useEffect(() => {
     // Simulated data loading
@@ -148,94 +149,101 @@ const CalendarScreen = () => {
   );
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <View style={styles.container}>
-        <View style={styles.header}>
-          <Text style={styles.headerTitle}>Calendar</Text>
-          <TouchableOpacity style={styles.addButton}>
-            <MaterialCommunityIcons name="plus" size={24} color="#e6ecec" />
+    <SafeAreaView style={{ flex: 1, paddingTop: insets.top, paddingBottom: 0, backgroundColor: '#121212' }}>
+      <StatusBar barStyle="light-content" translucent={true} />
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={0}
+      >
+        <View style={[styles.container, { paddingBottom: 76 + insets.bottom }]}>
+          <View style={styles.header}>
+            <Text style={styles.headerTitle}>Calendar</Text>
+            <TouchableOpacity style={styles.addButton}>
+              <MaterialCommunityIcons name="plus" size={24} color="#e6ecec" />
+            </TouchableOpacity>
+          </View>
+
+          {renderCalendarGrid()}
+
+          <View style={styles.eventsContainer}>
+            <Text style={styles.eventsTitle}>Today's Events</Text>
+            <FlatList
+              data={events}
+              renderItem={renderEventCard}
+              keyExtractor={(item) => item.id.toString()}
+              contentContainerStyle={styles.eventsList}
+            />
+          </View>
+
+          {/* Add Suggest Prep button */}
+          <TouchableOpacity onPress={handleSuggestPrep} style={{margin:16,padding:12,backgroundColor:'#00CFA8',borderRadius:8,alignItems:'center'}}>
+            <Text style={{color:'#fff',fontWeight:'bold'}}>Suggest Prep</Text>
           </TouchableOpacity>
-        </View>
+          {loadingSuggest && <ActivityIndicator color="#00CFA8" style={{margin:16}} />}
 
-        {renderCalendarGrid()}
+          {/* Overlay suggested slots as dashed blocks */}
+          {suggestedSlots.map((slot, idx) => (
+            <TouchableOpacity key={slot} onPress={() => setSelectedSlot(slot)} style={{position:'absolute',left:80,top:100+idx*70,right:20,height:56,borderWidth:1,borderColor:'#00CFA8',borderStyle:'dashed',borderRadius:8,backgroundColor:'#1E1E1E',padding:8,justifyContent:'center'}}>
+              <Text style={{color:'#00CFA8',fontWeight:'bold'}}>{slot}</Text>
+            </TouchableOpacity>
+          ))}
 
-        <View style={styles.eventsContainer}>
-          <Text style={styles.eventsTitle}>Today's Events</Text>
-          <FlatList
-            data={events}
-            renderItem={renderEventCard}
-            keyExtractor={(item) => item.id.toString()}
-            contentContainerStyle={styles.eventsList}
-          />
-        </View>
-
-        {/* Add Suggest Prep button */}
-        <TouchableOpacity onPress={handleSuggestPrep} style={{margin:16,padding:12,backgroundColor:'#00CFA8',borderRadius:8,alignItems:'center'}}>
-          <Text style={{color:'#fff',fontWeight:'bold'}}>Suggest Prep</Text>
-        </TouchableOpacity>
-        {loadingSuggest && <ActivityIndicator color="#00CFA8" style={{margin:16}} />}
-
-        {/* Overlay suggested slots as dashed blocks */}
-        {suggestedSlots.map((slot, idx) => (
-          <TouchableOpacity key={slot} onPress={() => setSelectedSlot(slot)} style={{position:'absolute',left:80,top:100+idx*70,right:20,height:56,borderWidth:1,borderColor:'#00CFA8',borderStyle:'dashed',borderRadius:8,backgroundColor:'#1E1E1E',padding:8,justifyContent:'center'}}>
-            <Text style={{color:'#00CFA8',fontWeight:'bold'}}>{slot}</Text>
-          </TouchableOpacity>
-        ))}
-
-        {/* Slot detail pane */}
-        {selectedSlot && (
-          <View style={{position:'absolute',left:20,right:20,top:300,backgroundColor:'#222',borderRadius:12,padding:20,zIndex:10}}>
-            <Text style={{color:'#fff',fontSize:16,marginBottom:12}}>Prep Slot: {selectedSlot}</Text>
-            <View style={{flexDirection:'row',justifyContent:'space-between'}}>
-              <TouchableOpacity onPress={() => handleConfirmPrep(selectedSlot)} style={{backgroundColor:'#00CFA8',borderRadius:18,paddingVertical:10,paddingHorizontal:24}}>
-                <Text style={{color:'#fff',fontWeight:'bold'}}>Accept</Text>
-              </TouchableOpacity>
-              <TouchableOpacity onPress={() => setSelectedSlot(null)} style={{borderColor:'#00CFA8',borderWidth:1,borderRadius:18,paddingVertical:10,paddingHorizontal:24}}>
-                <Text style={{color:'#00CFA8',fontWeight:'bold'}}>Edit</Text>
-              </TouchableOpacity>
+          {/* Slot detail pane */}
+          {selectedSlot && (
+            <View style={{position:'absolute',left:20,right:20,top:300,backgroundColor:'#222',borderRadius:12,padding:20,zIndex:10}}>
+              <Text style={{color:'#fff',fontSize:16,marginBottom:12}}>Prep Slot: {selectedSlot}</Text>
+              <View style={{flexDirection:'row',justifyContent:'space-between'}}>
+                <TouchableOpacity onPress={() => handleConfirmPrep(selectedSlot)} style={{backgroundColor:'#00CFA8',borderRadius:18,paddingVertical:10,paddingHorizontal:24}}>
+                  <Text style={{color:'#fff',fontWeight:'bold'}}>Accept</Text>
+                </TouchableOpacity>
+                <TouchableOpacity onPress={() => setSelectedSlot(null)} style={{borderColor:'#00CFA8',borderWidth:1,borderRadius:18,paddingVertical:10,paddingHorizontal:24}}>
+                  <Text style={{color:'#00CFA8',fontWeight:'bold'}}>Edit</Text>
+                </TouchableOpacity>
+              </View>
             </View>
-          </View>
-        )}
+          )}
 
-        {/* Toast */}
-        {toast && (
-          <View style={{position:'absolute',left:20,right:20,bottom:100,backgroundColor:'#1E1E1E',borderRadius:12,padding:16,alignItems:'center'}}>
-            <Text style={{color:'#fff'}}>{toast}</Text>
-          </View>
-        )}
-      </View>
+          {/* Toast */}
+          {toast && (
+            <View style={{position:'absolute',left:20,right:20,bottom:100,backgroundColor:'#1E1E1E',borderRadius:12,padding:16,alignItems:'center'}}>
+              <Text style={{color:'#fff'}}>{toast}</Text>
+            </View>
+          )}
+        </View>
 
-      {/* Bottom Navigation */}
-      <View style={styles.bottomNav}>
-        <TouchableOpacity 
-          style={styles.navItem}
-          onPress={() => navigation.navigate('Home')}
-        >
-          <MaterialCommunityIcons name="home" size={24} color="#bfc6c9" />
-          <Text style={styles.navLabel}>Home</Text>
-        </TouchableOpacity>
-        <TouchableOpacity 
-          style={styles.navItemActive}
-          onPress={() => navigation.navigate('Calendar')}
-        >
-          <MaterialCommunityIcons name="calendar" size={24} color="#e6ecec" />
-          <Text style={styles.navLabelActive}>Calendar</Text>
-        </TouchableOpacity>
-        <TouchableOpacity 
-          style={styles.navItem}
-          onPress={() => navigation.navigate('Chat')}
-        >
-          <MaterialCommunityIcons name="chat" size={24} color="#bfc6c9" />
-          <Text style={styles.navLabel}>Chat</Text>
-        </TouchableOpacity>
-        <TouchableOpacity 
-          style={styles.navItem}
-          onPress={() => navigation.navigate('Tasks')}
-        >
-          <MaterialCommunityIcons name="file-document-outline" size={24} color="#bfc6c9" />
-          <Text style={styles.navLabel}>Tasks</Text>
-        </TouchableOpacity>
-      </View>
+        {/* Bottom Navigation */}
+        <View style={[styles.bottomNav, { paddingBottom: insets.bottom + 10 }]}> 
+          <TouchableOpacity 
+            style={route.name === 'Home' ? styles.navItemActive : styles.navItem}
+            onPress={() => navigation.navigate('Home')}
+          >
+            <MaterialCommunityIcons name="home" size={24} color={route.name === 'Home' ? '#FFFFFF' : '#B0B0B0'} />
+            <Text style={route.name === 'Home' ? styles.navLabelActive : styles.navLabel}>Home</Text>
+          </TouchableOpacity>
+          <TouchableOpacity 
+            style={route.name === 'Calendar' ? styles.navItemActive : styles.navItem}
+            onPress={() => navigation.navigate('Calendar')}
+          >
+            <MaterialCommunityIcons name="calendar" size={24} color={route.name === 'Calendar' ? '#FFFFFF' : '#B0B0B0'} />
+            <Text style={route.name === 'Calendar' ? styles.navLabelActive : styles.navLabel}>Calendar</Text>
+          </TouchableOpacity>
+          <TouchableOpacity 
+            style={route.name === 'Chat' ? styles.navItemActive : styles.navItem}
+            onPress={() => navigation.navigate('Chat')}
+          >
+            <MaterialCommunityIcons name="chat" size={24} color={route.name === 'Chat' ? '#FFFFFF' : '#B0B0B0'} />
+            <Text style={route.name === 'Chat' ? styles.navLabelActive : styles.navLabel}>Chat</Text>
+          </TouchableOpacity>
+          <TouchableOpacity 
+            style={route.name === 'Projects' ? styles.navItemActive : styles.navItem}
+            onPress={() => navigation.navigate('Projects')}
+          >
+            <MaterialCommunityIcons name="folder" size={24} color={route.name === 'Projects' ? '#FFFFFF' : '#B0B0B0'} />
+            <Text style={route.name === 'Projects' ? styles.navLabelActive : styles.navLabel}>Projects</Text>
+          </TouchableOpacity>
+        </View>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 };
@@ -383,7 +391,9 @@ const styles = StyleSheet.create({
   },
   navItemActive: {
     alignItems: 'center',
-    opacity: 1,
+    backgroundColor: '#1E1E1E',
+    padding: 8,
+    borderRadius: 12,
   },
   navLabel: {
     color: '#bfc6c9',

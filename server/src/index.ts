@@ -41,8 +41,8 @@ app.post('/api/events', async (req, res) => {
     }
     if (error) throw error;
     return res.status(201).json({ success: true });
-  } catch (err) {
-    return res.status(500).json({ error: err.message });
+  } catch (err: any) {
+    return res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
   }
 });
 
@@ -59,8 +59,8 @@ app.get('/api/suggestions', async (req, res) => {
       .order('createdAt', { ascending: false });
     if (error) throw error;
     return res.json({ suggestions: data });
-  } catch (err) {
-    return res.status(500).json({ error: err.message });
+  } catch (err: any) {
+    return res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
   }
 });
 
@@ -75,8 +75,8 @@ app.post('/api/suggestions/:id/read', async (req, res) => {
       .eq('id', id);
     if (error) throw error;
     return res.json({ success: true });
-  } catch (err) {
-    return res.status(500).json({ error: err.message });
+  } catch (err: any) {
+    return res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
   }
 });
 
@@ -98,12 +98,12 @@ app.post('/api/suggest-prep-slot', async (req, res) => {
     let fallback = false;
     try {
       const openai = getOpenAIClient();
-      const resp = await openai.createChatCompletion({
+      const resp = await openai.chat.completions.create({
         model: 'gpt-3.5-turbo',
         messages: [{ role: 'system', content: prompt }],
         max_tokens: 100,
       });
-      const text = resp.data.choices[0].message?.content || '';
+      const text = resp.choices[0].message?.content || '';
       slots = JSON.parse(text);
       if (!Array.isArray(slots)) throw new Error('Not an array');
     } catch (err) {
@@ -114,7 +114,7 @@ app.post('/api/suggest-prep-slot', async (req, res) => {
       return res.json({ slots: [], message: 'Could not generate slots. Please try again later.' });
     }
     return res.json({ slots });
-  } catch (err) {
+  } catch (err: any) {
     return res.status(500).json({ error: 'Failed to suggest prep slots. Please try again.' });
   }
 });
@@ -133,7 +133,7 @@ app.post('/api/confirm-prep-slot', async (req, res) => {
     // Optionally create a calendar event (stub)
     // await supabase.from('calendar_events').insert([{ userId, start: chosenTime, ... }]);
     return res.json({ success: true });
-  } catch (err) {
+  } catch (err: any) {
     return res.status(500).json({ error: 'Failed to confirm prep slot. Please try again.' });
   }
 });
@@ -149,18 +149,18 @@ app.post('/api/generate-tasks', async (req, res) => {
     try {
       const openai = getOpenAIClient();
       const prompt = `${SOP_PROMPTS.newProjectOnboarding}\n${SOP_PROMPTS.taskGeneration}\nProject: ${projectBrief}`;
-      const resp = await openai.createChatCompletion({
+      const resp = await openai.chat.completions.create({
         model: 'gpt-3.5-turbo',
         messages: [{ role: 'system', content: prompt }],
         max_tokens: 500,
       });
-      const text = resp.data.choices[0].message?.content || '';
+      const text = resp.choices[0].message?.content || '';
       tasks = JSON.parse(text);
       if (!Array.isArray(tasks)) throw new Error('Not an array');
       break;
     } catch (err) {
       retries--;
-      errorMsg = err.message || 'OpenAI error';
+      errorMsg = err instanceof Error ? err.message : String(err) || 'OpenAI error';
       if (retries === 0) return res.status(500).json({ error: errorMsg });
       await new Promise(r => setTimeout(r, 2000));
     }
@@ -176,8 +176,8 @@ app.post('/api/generate-tasks', async (req, res) => {
     const { data, error } = await supabase.from('tasks').insert(inserts).select();
     if (error) throw error;
     return res.json({ tasks: data });
-  } catch (err) {
-    return res.status(500).json({ error: err.message || 'Failed to insert tasks' });
+  } catch (err: any) {
+    return res.status(500).json({ error: err instanceof Error ? err.message : String(err) || 'Failed to insert tasks' });
   }
 });
 
@@ -191,20 +191,20 @@ app.post('/api/assets-query', async (req, res) => {
     const openai = getOpenAIClient();
     const context = projectId ? `Project ID: ${projectId}` : `Meeting ID: ${meetingId}`;
     const prompt = `${SOP_PROMPTS.assetPrep}\n${context}`;
-    const resp = await openai.createChatCompletion({
+    const resp = await openai.chat.completions.create({
       model: 'gpt-3.5-turbo',
       messages: [{ role: 'system', content: prompt }],
       max_tokens: 200,
     });
-    const text = resp.data.choices[0].message?.content || '';
+    const text = resp.choices[0].message?.content || '';
     try {
       assets = JSON.parse(text);
       if (!Array.isArray(assets)) throw new Error('Not an array');
     } catch {
       assets = [];
     }
-  } catch (err) {
-    errorMsg = err.message || 'OpenAI error';
+  } catch (err: any) {
+    errorMsg = err instanceof Error ? err.message : String(err) || 'OpenAI error';
     assets = [];
   }
   // Store as suggested assets
@@ -233,17 +233,51 @@ app.post('/api/chat', async (req, res) => {
       ...(history || []).slice(-10),
       { role: 'user', content: message }
     ];
-    const resp = await openai.createChatCompletion({
+    const resp = await openai.chat.completions.create({
       model: 'gpt-3.5-turbo',
       messages,
       max_tokens: 200,
     });
-    const reply = resp.data.choices[0].message?.content || '';
+    const reply = resp.choices[0].message?.content || '';
     if (!reply || reply.toLowerCase().includes('error')) throw new Error('Low confidence');
     return res.json({ reply });
-  } catch (err) {
+  } catch (err: any) {
     // Fallback
     return res.json({ reply: SOP_PROMPTS.errorFallback });
+  }
+});
+
+// POST /api/inbound-email (webhook)
+app.post('/api/inbound-email', async (req, res) => {
+  const { userId, body, attachments } = req.body;
+  if (!userId || !body) return res.status(400).json({ error: 'Missing userId or body' });
+  try {
+    // Log event
+    await supabase.from('user_events').insert([
+      { userId, type: 'email_replied', payload: { body, attachments }, timestamp: new Date().toISOString() }
+    ]);
+    // Generate follow-up suggestion
+    const openai = getOpenAIClient();
+    const prompt = `${SOP_PROMPTS.emailReplyArrival}\nEmail: ${body}`;
+    let suggestion = '';
+    try {
+      const resp = await openai.chat.completions.create({
+        model: 'gpt-3.5-turbo',
+        messages: [{ role: 'system', content: prompt }],
+        max_tokens: 120,
+      });
+      suggestion = resp.choices[0].message?.content || '';
+    } catch {
+      suggestion = '';
+    }
+    if (suggestion) {
+      await supabase.from('proactive_suggestions').insert([
+        { userId, message: suggestion, read: false }
+      ]);
+    }
+    res.status(200).json({ ok: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) || 'Failed to process email webhook' });
   }
 });
 
@@ -274,12 +308,12 @@ cron.schedule('*/5 * * * *', async () => {
         while (retries > 0) {
           try {
             const openai = getOpenAIClient();
-            const resp = await openai.createChatCompletion({
+            const resp = await openai.chat.completions.create({
               model: 'gpt-3.5-turbo',
               messages: [{ role: 'system', content: prompt }],
               max_tokens: 80,
             });
-            suggestion = resp.data.choices[0].message?.content || '';
+            suggestion = resp.choices[0].message?.content || '';
             break;
           } catch (err) {
             retries--;
@@ -296,7 +330,7 @@ cron.schedule('*/5 * * * *', async () => {
         }
       }
     }
-  } catch (err) {
+  } catch (err: any) {
     console.error('[CRON] Suggestion generation failed:', err);
   }
 });
@@ -305,4 +339,4 @@ cron.schedule('*/5 * * * *', async () => {
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
-}); 
+});

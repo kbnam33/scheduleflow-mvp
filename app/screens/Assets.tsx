@@ -1,17 +1,12 @@
 import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, FlatList, SafeAreaView, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, FlatList, SafeAreaView, ActivityIndicator, KeyboardAvoidingView, Platform, StatusBar } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { RootStackParamList } from '../navigation/types';
 import axios from 'axios';
 import { useState } from 'react';
-
-type RootStackParamList = {
-  Home: undefined;
-  Calendar: undefined;
-  Chat: undefined;
-  Assets: undefined;
-};
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const assets = [
   { id: '1', type: 'pdf', title: 'Project Brief.pdf', subtitle: 'Relevant to branding project', tags: ['Team meet', 'Client update call'] },
@@ -28,7 +23,8 @@ const iconMap = {
 };
 
 const AssetsScreen = () => {
-  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
+  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList, 'Assets'>>();
+  const insets = useSafeAreaInsets();
   const [suggestedAssets, setSuggestedAssets] = useState([]);
   const [loadingAssets, setLoadingAssets] = useState(false);
   const [toast, setToast] = useState(null);
@@ -54,87 +50,96 @@ const AssetsScreen = () => {
   };
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()}>
-          <MaterialCommunityIcons name="arrow-left" size={24} color="#fff" />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>Assets</Text>
-        <View style={{ flex: 1 }} />
-        <TouchableOpacity>
-          <MaterialCommunityIcons name="dots-vertical" size={24} color="#fff" />
-        </TouchableOpacity>
-      </View>
-      <FlatList
-        data={assets}
-        keyExtractor={item => item.id}
-        contentContainerStyle={{ padding: 16, paddingBottom: 100 }}
-        renderItem={({ item }) => (
-          <View style={styles.assetCard}>
-            <MaterialCommunityIcons name={iconMap[item.type]} size={32} color="#fff" style={{ marginRight: 16 }} />
-            <View style={{ flex: 1 }}>
-              <Text style={styles.assetTitle}>{item.title}</Text>
-              <Text style={styles.assetSubtitle}>{item.subtitle}</Text>
-              <View style={styles.tagsRow}>
-                {item.tags.map((tag, idx) => (
-                  <View key={idx} style={styles.tag}><Text style={styles.tagText}>{tag}</Text></View>
-                ))}
-              </View>
-            </View>
-            <View style={styles.assetActions}>
-              <TouchableOpacity style={styles.assetActionBtn}>
-                <MaterialCommunityIcons name="download" size={24} color="#fff" />
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.assetActionBtn}>
-                <MaterialCommunityIcons name="share-variant" size={24} color="#fff" />
-              </TouchableOpacity>
-            </View>
-          </View>
-        )}
-      />
-      <TouchableOpacity style={styles.addAssetBtn}>
-        <MaterialCommunityIcons name="plus" size={32} color="#fff" />
-      </TouchableOpacity>
-      <View style={styles.bottomNav}>
-        <TouchableOpacity style={styles.navItem} onPress={() => navigation.navigate('Home')}>
-          <MaterialCommunityIcons name="home" size={24} color="#666" />
-          <Text style={styles.navLabel}>Home</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.navItem} onPress={() => navigation.navigate('Calendar')}>
-          <MaterialCommunityIcons name="calendar" size={24} color="#666" />
-          <Text style={styles.navLabel}>Calendar</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.navItem} onPress={() => navigation.navigate('Chat')}>
-          <MaterialCommunityIcons name="chat" size={24} color="#666" />
-          <Text style={styles.navLabel}>Chat</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.navItemActive}>
-          <MaterialCommunityIcons name="file-document-outline" size={24} color="#fff" />
-          <Text style={styles.navLabelActive}>Assets</Text>
-        </TouchableOpacity>
-      </View>
-      <TouchableOpacity onPress={handlePrepareDocs} style={{margin:16,padding:12,backgroundColor:'#00CFA8',borderRadius:8,alignItems:'center'}}>
-        <Text style={{color:'#fff',fontWeight:'bold'}}>Prepare Docs</Text>
-      </TouchableOpacity>
-      {loadingAssets && <ActivityIndicator color="#00CFA8" style={{margin:16}} />}
-      {suggestedAssets.length > 0 && suggestedAssets.map((asset, idx) => (
-        <View key={asset.filename || idx} style={{flexDirection:'row',alignItems:'center',backgroundColor:'#1E1E1E',borderRadius:12,padding:12,marginVertical:8}}>
-          <MaterialCommunityIcons name="file-document-outline" size={24} color="#00CFA8" style={{marginRight:12}} />
-          <Text style={{color:'#fff',flex:1}}>{asset.filename}</Text>
-          {asset.url ? (
-            <Text style={{color:'#00CFA8',marginRight:8}}>Uploaded</Text>
-          ) : (
-            <TouchableOpacity onPress={() => handleUpload(idx)} style={{backgroundColor:'#00CFA8',borderRadius:8,paddingVertical:6,paddingHorizontal:12}}>
-              <Text style={{color:'#fff'}}>Upload</Text>
+    <SafeAreaView style={{ flex: 1, paddingTop: insets.top, paddingBottom: 0, backgroundColor: '#121212' }}>
+      <StatusBar barStyle="light-content" translucent={true} />
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={0}
+      >
+        <View style={{ flex: 1, paddingBottom: 76 + insets.bottom }}>
+          <View style={styles.header}>
+            <TouchableOpacity onPress={() => navigation.goBack()}>
+              <MaterialCommunityIcons name="arrow-left" size={24} color="#fff" />
             </TouchableOpacity>
+            <Text style={styles.headerTitle}>Assets</Text>
+            <View style={{ flex: 1 }} />
+            <TouchableOpacity>
+              <MaterialCommunityIcons name="dots-vertical" size={24} color="#fff" />
+            </TouchableOpacity>
+          </View>
+          <FlatList
+            data={assets}
+            keyExtractor={item => item.id}
+            contentContainerStyle={{ padding: 16, paddingBottom: 100 }}
+            renderItem={({ item }) => (
+              <View style={styles.assetCard}>
+                <MaterialCommunityIcons name={iconMap[item.type]} size={32} color="#fff" style={{ marginRight: 16 }} />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.assetTitle}>{item.title}</Text>
+                  <Text style={styles.assetSubtitle}>{item.subtitle}</Text>
+                  <View style={styles.tagsRow}>
+                    {item.tags.map((tag, idx) => (
+                      <View key={idx} style={styles.tag}><Text style={styles.tagText}>{tag}</Text></View>
+                    ))}
+                  </View>
+                </View>
+                <View style={styles.assetActions}>
+                  <TouchableOpacity style={styles.assetActionBtn}>
+                    <MaterialCommunityIcons name="download" size={24} color="#fff" />
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.assetActionBtn}>
+                    <MaterialCommunityIcons name="share-variant" size={24} color="#fff" />
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
+          />
+          <TouchableOpacity style={styles.addAssetBtn}>
+            <MaterialCommunityIcons name="plus" size={32} color="#fff" />
+          </TouchableOpacity>
+          <TouchableOpacity onPress={handlePrepareDocs} style={{margin:16,padding:12,backgroundColor:'#00CFA8',borderRadius:8,alignItems:'center'}}>
+            <Text style={{color:'#fff',fontWeight:'bold'}}>Prepare Docs</Text>
+          </TouchableOpacity>
+          {loadingAssets && <ActivityIndicator color="#00CFA8" style={{margin:16}} />}
+          {suggestedAssets.length > 0 && suggestedAssets.map((asset, idx) => (
+            <View key={asset.filename || idx} style={{flexDirection:'row',alignItems:'center',backgroundColor:'#1E1E1E',borderRadius:12,padding:12,marginVertical:8}}>
+              <MaterialCommunityIcons name="file-document-outline" size={24} color="#00CFA8" style={{marginRight:12}} />
+              <Text style={{color:'#fff',flex:1}}>{asset.filename}</Text>
+              {asset.url ? (
+                <Text style={{color:'#00CFA8',marginRight:8}}>Uploaded</Text>
+              ) : (
+                <TouchableOpacity onPress={() => handleUpload(idx)} style={{backgroundColor:'#00CFA8',borderRadius:8,paddingVertical:6,paddingHorizontal:12}}>
+                  <Text style={{color:'#fff'}}>Upload</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          ))}
+          {toast && (
+            <View style={{position:'absolute',left:20,right:20,bottom:100,backgroundColor:'#1E1E1E',borderRadius:12,padding:16,alignItems:'center'}}>
+              <Text style={{color:'#fff'}}>{toast}</Text>
+            </View>
           )}
         </View>
-      ))}
-      {toast && (
-        <View style={{position:'absolute',left:20,right:20,bottom:100,backgroundColor:'#1E1E1E',borderRadius:12,padding:16,alignItems:'center'}}>
-          <Text style={{color:'#fff'}}>{toast}</Text>
+        <View style={[styles.bottomNav, { paddingBottom: insets.bottom }]}>
+          <TouchableOpacity style={styles.navItem} onPress={() => navigation.navigate('Home')}>
+            <MaterialCommunityIcons name="home" size={24} color="#666" />
+            <Text style={styles.navLabel}>Home</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.navItem} onPress={() => navigation.navigate('Calendar')}>
+            <MaterialCommunityIcons name="calendar" size={24} color="#666" />
+            <Text style={styles.navLabel}>Calendar</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.navItem} onPress={() => navigation.navigate('Chat')}>
+            <MaterialCommunityIcons name="chat" size={24} color="#666" />
+            <Text style={styles.navLabel}>Chat</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.navItemActive}>
+            <MaterialCommunityIcons name="file-document-outline" size={24} color="#fff" />
+            <Text style={styles.navLabelActive}>Assets</Text>
+          </TouchableOpacity>
         </View>
-      )}
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 };
