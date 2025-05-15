@@ -3,6 +3,7 @@ const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
 const logger = require('./utils/logger');
+const authMiddleware = require('./middleware/auth');
 
 // Import routes
 const chatRoutes = require('./routes/chat');
@@ -18,7 +19,8 @@ app.use(helmet());
 app.use(cors({
   origin: process.env.CORS_ORIGIN || '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true
 }));
 
 // Request parsing
@@ -38,16 +40,16 @@ app.use((req, res, next) => {
   next();
 });
 
-// Health check endpoint
+// Health check endpoint (public)
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// API routes
-app.use('/api/chat', chatRoutes);
-app.use('/api/tasks', taskRoutes);
-app.use('/api/calendar', calendarRoutes);
-app.use('/api/email', emailRoutes);
+// Protected API routes
+app.use('/api/chat', authMiddleware, chatRoutes);
+app.use('/api/tasks', authMiddleware, taskRoutes);
+app.use('/api/calendar', authMiddleware, calendarRoutes);
+app.use('/api/email', authMiddleware, emailRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {
