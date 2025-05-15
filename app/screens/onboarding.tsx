@@ -1,411 +1,273 @@
+// app/screens/Onboarding.tsx
+
 import React, { useState } from 'react';
 import {
   View,
   Text,
+  StyleSheet,
   TextInput,
   TouchableOpacity,
-  StyleSheet,
-  ScrollView,
-  SafeAreaView,
-  Alert,
   KeyboardAvoidingView,
   Platform,
-  StatusBar,
+  ActivityIndicator,
 } from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import axios from 'axios';
-import { useNavigation } from '@react-navigation/native';
-import { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { RootStackParamList } from '../navigation/types';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-// Define the navigation prop type
-type OnboardingScreenNavigationProp = NativeStackNavigationProp<
-  RootStackParamList,
-  'Onboarding'
->;
+type Step = 0 | 1 | 2 | 3 | 4;
+const TOTAL_STEPS = 5;
 
-// Define the component as a proper React FC
-const OnboardingScreen: React.FC = () => {
-  const [currentStep, setCurrentStep] = useState(0);
+const Onboarding = ({ navigation }) => {
+  const insets = useSafeAreaInsets();
+  const [step, setStep] = useState<Step>(0);
+  const [loading, setLoading] = useState(false);
+
+  // form state
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [isLogin, setIsLogin] = useState(false);
+  const [confirm, setConfirm] = useState('');
   const [role, setRole] = useState('');
-  const [creativeTime, setCreativeTime] = useState('');
+  const [calendarConnected, setCalendarConnected] = useState(false);
+  const [videoConnected, setVideoConnected] = useState(false);
+  const [creativityTime, setCreativityTime] = useState<{ start: string; end: string } | null>(null);
 
-  // Explicitly type the navigation
-  const navigation = useNavigation<OnboardingScreenNavigationProp>();
-
-  const insets = useSafeAreaInsets();
-
-  const validateEmail = (email: string) => {
-    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
-  };
-
-  const validatePassword = (password: string) => {
-    return password.length >= 6;
-  };
-
-  const handleNext = async () => {
-    if (currentStep === 0) {
-      // Validate email and password
-      if (!email || !password) {
-        Alert.alert('Error', 'Please fill in all fields');
-        return;
-      }
-
-      if (!validateEmail(email)) {
-        Alert.alert('Error', 'Please enter a valid email address');
-        return;
-      }
-
-      if (!validatePassword(password)) {
-        Alert.alert('Error', 'Password must be at least 6 characters long');
-        return;
-      }
-
-      if (!isLogin && password !== confirmPassword) {
-        Alert.alert('Error', 'Passwords do not match');
-        return;
-      }
-
-      try {
-        // Here you would typically make an API call to your backend
-        // For now, we'll just proceed to the next step
-        setCurrentStep(prev => prev + 1);
-      } catch (error) {
-        Alert.alert('Error', 'Failed to authenticate. Please try again.');
-      }
-      return;
+  // Sign-up step
+  const onSignUp = async () => {
+    if (!email || !password || password !== confirm) {
+      return alert('Please check your email and passwords match');
     }
-
-    if (currentStep === 1) {
-      // Calendar connection step
-      try {
-        await axios.get('http://localhost:3001/api/health');
-        setCurrentStep(prev => prev + 1);
-      } catch (error) {
-        Alert.alert('Warning', 'Calendar connection failed. You can try again later.');
-        setCurrentStep(prev => prev + 1);
-      }
-      return;
-    }
-
-    if (currentStep === 2) {
-      // Video app connection step
-      try {
-        await axios.post('http://localhost:3001/api/health');
-        setCurrentStep(prev => prev + 1);
-      } catch (error) {
-        Alert.alert('Warning', 'Video app connection failed. You can try again later.');
-        setCurrentStep(prev => prev + 1);
-      }
-      return;
-    }
-
-    if (currentStep === 3) {
-      // Role selection step
-      if (!role) {
-        Alert.alert('Error', 'Please select your role');
-        return;
-      }
-      setCurrentStep(prev => prev + 1);
-      return;
-    }
-
-    if (currentStep === 4) {
-      // Creative time selection step
-      if (!creativeTime) {
-        Alert.alert('Error', 'Please select your most creative time');
-        return;
-      }
-      // Navigate to Home
-      navigation.navigate('Home');
-      return;
+    setLoading(true);
+    try {
+      await axios.post('/api/signup', { email, password });
+      setStep(1);
+    } catch {
+      alert('Sign up failed');
+    } finally {
+      setLoading(false);
     }
   };
 
-  const handleBack = () => {
-    setCurrentStep(prev => prev - 1);
+  // Next / Prev for steps 1–4
+  const onNext = async () => {
+    if (step === 1) {
+      if (!role.trim()) return alert('Please enter what you do');
+      await axios.post('/api/users/me/preferences', { role: role.trim() });
+    }
+    if (step < TOTAL_STEPS - 1) {
+      setStep((s) => (s + 1) as Step);
+    } else {
+      navigation.replace('Home');
+    }
+  };
+  const onPrev = () => {
+    if (step > 0) setStep((s) => (s - 1) as Step);
   };
 
-  const renderStep = () => {
-    switch (currentStep) {
-      case 0:
-        return (
-          <View style={styles.stepContainer}>
-            <Text style={styles.title}>{isLogin ? 'Log In' : 'Sign Up'}</Text>
+  // Optional connectors
+  const connectCalendar = async () => {
+    setCalendarConnected(true);
+    await axios.post('/api/users/me/preferences', { calendarConnected: true });
+    onNext();
+  };
+  const connectVideo = async () => {
+    setVideoConnected(true);
+    await axios.post('/api/users/me/preferences', { videoConnected: true });
+    onNext();
+  };
+  const saveCreativity = async () => {
+    if (!creativityTime) return alert('Enter your creative hours');
+    await axios.post('/api/users/me/preferences', { creativityTime });
+    onNext();
+  };
+
+  return (
+    <SafeAreaView style={[styles.safeArea, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
+      <KeyboardAvoidingView
+        style={styles.container}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      >
+        <Text style={styles.stepIndicator}>Step {step + 1} / {TOTAL_STEPS}</Text>
+
+        {/* Step 0: Sign Up */}
+        {step === 0 && (
+          <View style={styles.step}>
+            <Text style={styles.label}>Sign up</Text>
             <TextInput
               style={styles.input}
               placeholder="Email"
+              placeholderTextColor="#888"
+              keyboardType="email-address"
               value={email}
               onChangeText={setEmail}
-              keyboardType="email-address"
-              autoCapitalize="none"
             />
             <TextInput
               style={styles.input}
               placeholder="Password"
+              secureTextEntry
+              placeholderTextColor="#888"
               value={password}
               onChangeText={setPassword}
-              secureTextEntry
             />
-            {!isLogin && (
-              <TextInput
-                style={styles.input}
-                placeholder="Confirm Password"
-                value={confirmPassword}
-                onChangeText={setConfirmPassword}
-                secureTextEntry
-              />
-            )}
-            <TouchableOpacity
-              style={styles.toggleButton}
-              onPress={() => setIsLogin(!isLogin)}
-            >
-              <Text style={styles.toggleText}>
-                {isLogin ? 'Need an account? Sign Up' : 'Have an account? Log In'}
+            <TextInput
+              style={styles.input}
+              placeholder="Confirm Password"
+              secureTextEntry
+              placeholderTextColor="#888"
+              value={confirm}
+              onChangeText={setConfirm}
+            />
+
+            <TouchableOpacity style={styles.fullButton} onPress={onSignUp} disabled={loading}>
+              {loading
+                ? <ActivityIndicator color="#121212" />
+                : <Text style={styles.fullButtonText}>Sign Up</Text>
+              }
+            </TouchableOpacity>
+
+            <TouchableOpacity onPress={() => navigation.replace('Login')}>
+              <Text style={styles.loginLink}>Already have an account? Login</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {/* Step 1: Role (mandatory) */}
+        {step === 1 && (
+          <View style={styles.step}>
+            <Text style={styles.label}>What do you do?</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="e.g., Graphic Designer"
+              placeholderTextColor="#888"
+              value={role}
+              onChangeText={setRole}
+            />
+          </View>
+        )}
+
+        {/* Step 2: Calendar (optional) */}
+        {step === 2 && (
+          <View style={styles.step}>
+            <Text style={styles.label}>Connect your calendar (optional)</Text>
+            <TouchableOpacity style={styles.button} onPress={connectCalendar}>
+              <Text style={styles.buttonText}>
+                {calendarConnected ? 'Connected' : 'Connect Calendar'}
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.skipLink} onPress={onNext}>
+              <Text style={styles.skipText}>Skip</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {/* Step 3: Video Apps (optional) */}
+        {step === 3 && (
+          <View style={styles.step}>
+            <Text style={styles.label}>Connect video apps (optional)</Text>
+            <TouchableOpacity style={styles.button} onPress={connectVideo}>
+              <Text style={styles.buttonText}>
+                {videoConnected ? 'Connected' : 'Connect Zoom/Meet'}
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.skipLink} onPress={onNext}>
+              <Text style={styles.skipText}>Skip</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {/* Step 4: Creativity Hours (optional) */}
+        {step === 4 && (
+          <View style={styles.step}>
+            <Text style={styles.label}>When are you most creative? (optional)</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="e.g., 9:00 AM - 12:00 PM"
+              placeholderTextColor="#888"
+              onChangeText={(t) => {
+                const [s, e] = t.split('-');
+                setCreativityTime({ start: s?.trim(), end: e?.trim() } as any);
+              }}
+            />
+            <TouchableOpacity style={styles.button} onPress={saveCreativity}>
+              <Text style={styles.buttonText}>Complete</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.skipLink} onPress={onNext}>
+              <Text style={styles.skipText}>Skip</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {/* Prev/Next nav for steps ≥1 */}
+        {step > 0 && (
+          <View style={styles.navRow}>
+            <TouchableOpacity disabled={step === 0} onPress={onPrev}>
+              <Text style={[styles.navText, step === 0 && styles.disabled]}>Prev</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.nextButton} onPress={onNext}>
+              <Text style={styles.nextText}>
+                {step < TOTAL_STEPS - 1 ? 'Next' : 'Finish'}
               </Text>
             </TouchableOpacity>
           </View>
-        );
-
-      case 1:
-        return (
-          <View style={styles.stepContainer}>
-            <Text style={styles.title}>Connect Your Calendar</Text>
-            <TouchableOpacity style={styles.connectButton}>
-              <Text style={styles.buttonText}>Google Calendar</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.connectButton}>
-              <Text style={styles.buttonText}>Apple Calendar</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.connectButton}>
-              <Text style={styles.buttonText}>Outlook Calendar</Text>
-            </TouchableOpacity>
-          </View>
-        );
-
-      case 2:
-        return (
-          <View style={styles.stepContainer}>
-            <Text style={styles.title}>Connect Video Apps</Text>
-            <TouchableOpacity style={styles.connectButton}>
-              <Text style={styles.buttonText}>Google Meet</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.connectButton}>
-              <Text style={styles.buttonText}>Zoom</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.connectButton}>
-              <Text style={styles.buttonText}>Microsoft Teams</Text>
-            </TouchableOpacity>
-          </View>
-        );
-
-      case 3:
-        return (
-          <View style={styles.stepContainer}>
-            <Text style={styles.title}>What's your role?</Text>
-            <TouchableOpacity
-              style={[styles.radioButton, role === 'designer' && styles.radioButtonSelected]}
-              onPress={() => setRole('designer')}
-            >
-              <Text style={styles.radioText}>Graphic Designer</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.radioButton, role === 'developer' && styles.radioButtonSelected]}
-              onPress={() => setRole('developer')}
-            >
-              <Text style={styles.radioText}>Developer</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.radioButton, role === 'writer' && styles.radioButtonSelected]}
-              onPress={() => setRole('writer')}
-            >
-              <Text style={styles.radioText}>Content Writer</Text>
-            </TouchableOpacity>
-          </View>
-        );
-
-      case 4:
-        return (
-          <View style={styles.stepContainer}>
-            <Text style={styles.title}>When are you most creative?</Text>
-            <TouchableOpacity
-              style={[styles.radioButton, creativeTime === 'morning' && styles.radioButtonSelected]}
-              onPress={() => setCreativeTime('morning')}
-            >
-              <Text style={styles.radioText}>Morning (6AM - 12PM)</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.radioButton, creativeTime === 'afternoon' && styles.radioButtonSelected]}
-              onPress={() => setCreativeTime('afternoon')}
-            >
-              <Text style={styles.radioText}>Afternoon (12PM - 6PM)</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.radioButton, creativeTime === 'evening' && styles.radioButtonSelected]}
-              onPress={() => setCreativeTime('evening')}
-            >
-              <Text style={styles.radioText}>Evening (6PM - 12AM)</Text>
-            </TouchableOpacity>
-          </View>
-        );
-
-      default:
-        return null;
-    }
-  };
-
-  return (
-    <SafeAreaView style={{ flex: 1, paddingTop: insets.top, paddingBottom: 0, backgroundColor: '#121212' }}>
-      <StatusBar barStyle="light-content" translucent={true} />
-      <KeyboardAvoidingView
-        style={{ flex: 1 }}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        keyboardVerticalOffset={0}
-      >
-        <ScrollView contentContainerStyle={{ flexGrow: 1, paddingBottom: 76 + insets.bottom }}>
-          {renderStep()}
-        </ScrollView>
-        <View style={[styles.footer, { paddingBottom: insets.bottom }]}>
-          <View style={styles.progressDots}>
-            {[0, 1, 2, 3, 4].map(step => (
-              <View
-                key={step}
-                style={[
-                  styles.dot,
-                  currentStep === step && styles.activeDot,
-                ]}
-              />
-            ))}
-          </View>
-          <View style={styles.navigationButtons}>
-            {currentStep > 0 && (
-              <TouchableOpacity style={styles.navButton} onPress={handleBack}>
-                <Text style={styles.navButtonText}>Back</Text>
-              </TouchableOpacity>
-            )}
-            <TouchableOpacity style={styles.navButton} onPress={handleNext}>
-              <Text style={styles.navButtonText}>
-                {currentStep === 4 ? 'Finish' : 'Next'}
-              </Text>
-            </TouchableOpacity>
-          </View>
-        </View>
+        )}
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
 };
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#121212',
-  },
-  scrollContent: {
-    flexGrow: 1,
-    padding: 20,
-  },
-  stepContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingVertical: 20,
-  },
-  title: {
-    fontSize: 24,
-    fontWeight: 'bold',
+  safeArea: { flex: 1, backgroundColor: '#121212' },
+  container: { flex: 1, paddingHorizontal: 16, justifyContent: 'center' },
+  stepIndicator: { color: '#888', fontSize: 14, textAlign: 'center', marginBottom: 24 },
+  step: { marginBottom: 32 },
+  label: { color: '#fff', fontSize: 18, marginBottom: 12 },
+  input: {
+    backgroundColor: '#1E1E1E',
+    borderRadius: 8,
+    padding: 12,
+    fontSize: 16,
     color: '#fff',
-    marginBottom: 30,
+    marginBottom: 16,
+  },
+  fullButton: {
+    backgroundColor: '#00E0B0',
+    borderRadius: 8,
+    padding: 14,
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  fullButtonText: {
+    color: '#121212',
+    fontWeight: '600',
+    fontSize: 16,
+    width: '100%',
     textAlign: 'center',
   },
-  input: {
-    width: '100%',
-    height: 50,
-    backgroundColor: '#1a1a1a',
+  loginLink: { color: '#00E0B0', textAlign: 'center', marginTop: 8 },
+  button: {
+    backgroundColor: '#00E0B0',
     borderRadius: 8,
-    paddingHorizontal: 15,
-    marginBottom: 15,
-    color: '#fff',
-  },
-  connectButton: {
-    width: '100%',
-    height: 50,
-    backgroundColor: '#1a1a1a',
-    borderRadius: 8,
-    justifyContent: 'center',
+    padding: 14,
     alignItems: 'center',
-    marginBottom: 15,
+    marginBottom: 8,
   },
-  buttonText: {
-    color: '#fff',
-    fontSize: 16,
-  },
-  toggleButton: {
-    marginTop: 15,
-  },
-  toggleText: {
-    color: '#666',
-    fontSize: 14,
-  },
-  radioButton: {
-    width: '100%',
-    height: 50,
-    backgroundColor: '#1a1a1a',
-    borderRadius: 8,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 15,
-  },
-  radioButtonSelected: {
-    backgroundColor: '#333',
-    borderWidth: 1,
-    borderColor: '#fff',
-  },
-  radioText: {
-    color: '#fff',
-    fontSize: 16,
-  },
-  footer: {
-    padding: 20,
-    borderTopWidth: 1,
-    borderTopColor: '#333',
-  },
-  progressDots: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    marginBottom: 20,
-  },
-  dot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: '#333',
-    marginHorizontal: 4,
-  },
-  activeDot: {
-    backgroundColor: '#fff',
-  },
-  navigationButtons: {
+  buttonText: { color: '#121212', fontWeight: '600', fontSize: 16 },
+  skipLink: { alignItems: 'center', marginTop: 4 },
+  skipText: { color: '#00E0B0', fontSize: 14 },
+  navRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-  },
-  navButton: {
-    flex: 1,
-    height: 50,
-    backgroundColor: '#1a1a1a',
-    borderRadius: 8,
-    justifyContent: 'center',
     alignItems: 'center',
-    marginHorizontal: 5,
+    marginTop: 16,
   },
-  navButtonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: 'bold',
+  navText: { color: '#00E0B0', fontSize: 16 },
+  disabled: { opacity: 0.4 },
+  nextButton: {
+    backgroundColor: '#00E0B0',
+    borderRadius: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 24,
   },
+  nextText: { color: '#121212', fontSize: 16, fontWeight: '600' },
 });
 
-export default OnboardingScreen;
+export default Onboarding;

@@ -79,19 +79,65 @@ This document outlines the high-level context for the ScheduleFlow MVP (new) pro
 - **Elements:** User avatar (40px circle, left), title "Welcome back, {Name}" (24px), subtitle date (14px).
 - **Right Icons:** Clipboard icon then bell icon (24px each, spacing 16px).
 
-#### 3.2 Stats Cards
+#### 3.2 Message Container (Status Updates)
+- **Position:** Full-width container between input field and dynamic purpose bar
+- **Design:**
+  - Glass morphism effect background (blur + transparency)
+  - Auto-dismissing after 2 seconds with reverse progress indicator
+  - Close button ("x") in top-right corner
+  - Text color: Green for success, Red for failure
+  - Smooth fade-in/fade-out animations
+- **Use Cases:**
+  - Success messages (e.g., "Successfully switched to tomorrow's schedule")
+  - Error messages (e.g., "Unable to update schedule view")
+  - System notifications
+- **Behavior:**
+  - Appears dynamically when needed
+  - 2-second auto-dismiss with visual progress indicator
+  - Manual dismiss via close button
+  - Non-intrusive, temporary display
+
+#### 3.3 Dynamic Purpose Bar (formerly Chat Teaser)
+- **Position:** Full-width container below message container (if present) or input field
+- **Design:**
+  - Consistent with other full-width containers
+  - Clear visual hierarchy for different types of content
+  - Interactive elements for user actions
+- **Use Cases:**
+  1. **Client Query Display:**
+     - Shows extracted client queries from emails
+     - Displays pending AI updates from chat screen
+     - Presents verification requests for AI suggestions
+  2. **AI Suggestions:**
+     - Proactive recommendations for projects and schedules
+     - Action items requiring user attention
+     - Priority-based content display
+- **Behavior:**
+  - Content dynamically updates based on priority
+  - AI determines content priority based on:
+    - Pending client queries
+    - Unverified AI suggestions
+    - Schedule confirmations
+    - Project updates
+  - Interactive elements allow users to:
+    - Copy suggestions to input chat
+    - Request AI assistance
+    - Take immediate action
+    - Dismiss or ignore
+
+#### 3.4 Stats Cards
 
 - Two side-by-side cards, each 48px tall, width = (screenWidth – 48px)/2, background #1E1E1E, border-radius 12px.
 - Left: "Today's Meetings" label + count; Right: "Pending Tasks" label + count.
 
-#### 3.3 Today's Schedule
+#### 3.5 Today's Schedule
 
 - Title "Today's Schedule" (18px, weight 500), "View All" link (14px) aligned right.
 - List items: card height 72px, border-radius 12px, 16px vertical margin.
 - Left: time (16px, 14px secondary), center: event title 16px, details 14px secondary.
 - Right: calendar icon button (24px).
 
-#### 3.4 Chat Prompt
+#### 3.6 Chat Prompt
 
 - Last-thread pill: rounded 20px height, padding 8px 12px, background #2A2A2A, label text 14px.
 - Input: full-width text field 48px tall with mic icon left and send arrow right.
