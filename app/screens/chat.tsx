@@ -1,200 +1,171 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   TouchableOpacity,
-  TextInput,
   FlatList,
-  Animated,
-  Easing,
-  SafeAreaView,
-  KeyboardAvoidingView,
+  TextInput,
   Platform,
-  StatusBar,
+  KeyboardAvoidingView,
 } from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { useNavigation, useRoute } from '@react-navigation/native';
+import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../navigation/types';
-import axios from 'axios';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+type Message = { id: string; text: string; sender: 'user' | 'assistant'; timestamp: string };
 type NavigationProp = NativeStackNavigationProp<RootStackParamList, 'Chat'>;
+
+const STUB_QUICK_ACTIONS = [
+  { id: '1', title: 'Reschedule', subtitle: 'I cannot attend a meeting' },
+  { id: '2', title: 'Update a document', subtitle: 'Summarize meeting notes' },
+  { id: '3', title: 'Create a plan', subtitle: 'Complete pending tasks' },
+  { id: '4', title: 'Notify Team', subtitle: 'Upcoming meeting' },
+];
 
 const ChatScreen = () => {
   const navigation = useNavigation<NavigationProp>();
-  const route = useRoute();
   const insets = useSafeAreaInsets();
-  const [messages, setMessages] = useState<any[]>([]);
+  const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
-  const [loading, setLoading] = useState(true);
-  const [loadingReply, setLoadingReply] = useState(false);
+  const [typing, setTyping] = useState(false);
+  const flatListRef = useRef<FlatList<Message>>(null);
+  const [hasUnreadSuggestions] = useState(true);
 
-  const userId = 'test-user'; // Replace with real user id logic
   useEffect(() => {
-    // Simulated data loading
-    setLoading(false);
-    setMessages([
-      {
-        id: 1,
-        text: 'Can you help me prepare for the board meeting?',
-        time: '10:30 AM',
-        isUser: false,
-      },
-      {
-        id: 2,
-        text: 'I\'ll help you prepare for the board meeting. What specific aspects would you like to focus on?',
-        time: '10:31 AM',
-        isUser: true,
-      },
-      {
-        id: 3,
-        text: 'I need to review the Q4 financials and prepare a presentation.',
-        time: '10:32 AM',
-        isUser: false,
-      },
-    ]);
-
-    // Fetch unread suggestions and inject as assistant messages
-    const fetchSuggestions = async () => {
-      try {
-        const res = await axios.get(`http://localhost:3001/api/suggestions?userId=${userId}`);
-        const suggestions = res.data.suggestions || [];
-        if (suggestions.length > 0) {
-          const suggestionMessages = suggestions.map((s: any) => ({
-            id: `sugg-${s.id}`,
-            text: s.message,
-            time: new Date(s.createdAt).toLocaleTimeString(),
-            isUser: false,
-          }));
-          setMessages(msgs => [...suggestionMessages, ...msgs]);
-          // Mark all as read
-          await Promise.all(suggestions.map((s: any) => axios.post(`http://localhost:3001/api/suggestions/${s.id}/read`)));
-        }
-      } catch {}
-    };
-    fetchSuggestions();
+    // load initial messages
   }, []);
 
-  const sendMessage = async () => {
+  useEffect(() => {
+    flatListRef.current?.scrollToEnd({ animated: true });
+  }, [messages]);
+
+  const sendMessage = () => {
     if (!input.trim()) return;
-    setLoadingReply(true);
-    const newMsg = { id: Date.now(), text: input, time: new Date().toLocaleTimeString(), isUser: true };
-    const updatedHistory = [...messages, newMsg];
-    setMessages(updatedHistory);
+    const newMsg: Message = {
+      id: Date.now().toString(),
+      text: input,
+      sender: 'user',
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    };
+    setMessages(prev => [...prev, newMsg]);
     setInput('');
-    try {
-      await AsyncStorage.setItem('chatHistory', JSON.stringify(updatedHistory));
-      const res = await axios.post('http://localhost:3001/api/chat', {
-        userId: 'test-user',
-        message: input,
-        history: updatedHistory.map(m => ({ role: m.isUser ? 'user' : 'assistant', content: m.text }))
-      });
-      const aiMsg = { id: 'ai-' + Date.now(), text: res.data.reply, time: new Date().toLocaleTimeString(), isUser: false };
-      const finalHistory = [...updatedHistory, aiMsg];
-      setMessages(finalHistory);
-      await AsyncStorage.setItem('chatHistory', JSON.stringify(finalHistory));
-    } catch {
-      const aiMsg = { id: 'ai-' + Date.now(), text: "I'm sorry, I couldn't process your request right now. Please try again or ask something else.", time: new Date().toLocaleTimeString(), isUser: false };
-      setMessages(msgs => [...msgs, aiMsg]);
-    } finally {
-      setLoadingReply(false);
-    }
+    // simulate AI typing
+    setTyping(true);
+    setTimeout(() => {
+      const aiMsg: Message = {
+        id: (Date.now()+1).toString(),
+        text: "I'm sorry, I couldn't process your request right now.",
+        sender: 'assistant',
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      };
+      setMessages(prev => [...prev, aiMsg]);
+      setTyping(false);
+    }, 1500);
   };
 
-  useEffect(() => {
-    AsyncStorage.getItem('chatHistory').then(data => {
-      if (data) setMessages(JSON.parse(data));
-    });
-  }, []);
-
-  const renderMessage = ({ item }: { item: any }) => (
-    <View style={[
-      styles.messageContainer,
-      item.isUser ? styles.userMessageContainer : styles.assistantMessageContainer
-    ]}>
-      <View style={[
-        styles.messageBubble,
-        item.isUser ? styles.userMessageBubble : styles.assistantMessageBubble
-      ]}>
-        <Text style={styles.messageText}>{item.text}</Text>
-        <Text style={styles.messageTime}>{item.time}</Text>
+  const renderMessage = ({ item }: { item: Message }) => {
+    const isUser = item.sender === 'user';
+    return (
+      <View
+        style={[
+          styles.messageBubble,
+          isUser ? styles.userBubble : styles.assistantBubble,
+        ]}
+      >
+        <Text style={isUser ? styles.userText : styles.assistantText}>{item.text}</Text>
+        <Text style={styles.timestamp}>{item.timestamp}</Text>
       </View>
-    </View>
-  );
+    );
+  };
 
   return (
-    <SafeAreaView style={{ flex: 1, paddingTop: insets.top, paddingBottom: 0, backgroundColor: '#121212' }}>
-      <StatusBar barStyle="light-content" translucent={true} />
+    <SafeAreaView style={[styles.safeArea, { paddingTop: insets.top - 12, paddingBottom: insets.bottom }]}>      
       <KeyboardAvoidingView
-        style={{ flex: 1 }}
+        style={styles.container}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        keyboardVerticalOffset={0}
+        keyboardVerticalOffset={insets.bottom + 56}
       >
-        <View style={[styles.container, { paddingBottom: 76 + insets.bottom }]}>
-          <View style={styles.header}>
+        {/* Header */}
+        <View style={styles.headerRow}>
+          <View style={styles.headerRowTopLeft}>
+            <TouchableOpacity onPress={() => navigation.goBack()}>
+              <MaterialCommunityIcons name="chevron-left" size={24} color="#a3b3c2b3" />
+            </TouchableOpacity>
             <Text style={styles.headerTitle}>Chat</Text>
           </View>
-          <FlatList
-            data={messages}
-            renderItem={renderMessage}
-            keyExtractor={(item) => item.id.toString()}
-            contentContainerStyle={[styles.messagesList, { paddingBottom: 100 }]}
-          />
-          <View style={styles.inputContainer}>
-            <TouchableOpacity style={styles.micButton}>
-              <MaterialCommunityIcons name="microphone" size={20} color="#bfc6c9" />
-            </TouchableOpacity>
-            <TextInput
-              style={styles.input}
-              placeholder="Type a message..."
-              placeholderTextColor="#666"
-              value={input}
-              onChangeText={setInput}
-              onSubmitEditing={sendMessage}
-            />
-            <TouchableOpacity style={styles.sendButton} onPress={sendMessage}>
-              <MaterialCommunityIcons name="send" size={20} color="#bfc6c9" />
-            </TouchableOpacity>
-          </View>
-          {loadingReply && (
-            <View style={[styles.messageContainer, styles.assistantMessageContainer]}>
-              <View style={[styles.messageBubble, styles.assistantMessageBubble]}>
-                <Text style={styles.messageText}>...</Text>
-              </View>
-            </View>
-          )}
+          <TouchableOpacity>
+            <MaterialCommunityIcons name="dots-vertical" size={24} color="#a3b3c299" />
+          </TouchableOpacity>
         </View>
-        <View style={[styles.bottomNav, { paddingBottom: insets.bottom + 10 }]}>
-          <TouchableOpacity 
-            style={route.name === 'Home' ? styles.navItemActive : styles.navItem}
-            onPress={() => navigation.navigate('Home')}
-          >
-            <MaterialCommunityIcons name="home" size={24} color={route.name === 'Home' ? '#FFFFFF' : '#B0B0B0'} />
-            <Text style={route.name === 'Home' ? styles.navLabelActive : styles.navLabel}>Home</Text>
+
+        {/* Message List */}
+        <FlatList
+          ref={flatListRef}
+          data={messages}
+          renderItem={renderMessage}
+          keyExtractor={item => item.id}
+          contentContainerStyle={styles.messagesList}
+          showsVerticalScrollIndicator={false}
+        />
+
+        {/* Quick Actions */}
+        <View style={styles.quickActionsContainer}>
+          {STUB_QUICK_ACTIONS.map(action => (
+            <TouchableOpacity key={action.id} style={styles.quickActionBubble}>
+              <Text style={styles.quickActionTitle}>{action.title}</Text>
+              <Text style={styles.quickActionSubtitle}>{action.subtitle}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        {/* Input Bar */}
+        <View style={styles.inputSection}>
+          <TouchableOpacity style={styles.micIcon}>
+            <MaterialCommunityIcons name="microphone" size={24} color="#666" />
           </TouchableOpacity>
-          <TouchableOpacity 
-            style={route.name === 'Calendar' ? styles.navItemActive : styles.navItem}
-            onPress={() => navigation.navigate('Calendar')}
-          >
-            <MaterialCommunityIcons name="calendar" size={24} color={route.name === 'Calendar' ? '#FFFFFF' : '#B0B0B0'} />
-            <Text style={route.name === 'Calendar' ? styles.navLabelActive : styles.navLabel}>Calendar</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="Type a message..."
+            placeholderTextColor="#666"
+            value={input}
+            onChangeText={setInput}
+            onSubmitEditing={sendMessage}
+          />
+          <TouchableOpacity style={styles.sendIcon} onPress={sendMessage}>
+            <MaterialCommunityIcons name="send" size={24} color="#6c9b9bcc" />
           </TouchableOpacity>
-          <TouchableOpacity 
-            style={route.name === 'Chat' ? styles.navItemActive : styles.navItem}
-            onPress={() => navigation.navigate('Chat')}
-          >
-            <MaterialCommunityIcons name="chat" size={24} color={route.name === 'Chat' ? '#FFFFFF' : '#B0B0B0'} />
-            <Text style={route.name === 'Chat' ? styles.navLabelActive : styles.navLabel}>Chat</Text>
+        </View>
+
+        {/* Typing Indicator */}
+        {typing && (
+          <View style={styles.typingIndicator}>
+            <View style={styles.typingDot} />
+            <View style={[styles.typingDot, { opacity: 0.6 }]} />
+            <View style={styles.typingDot} />
+          </View>
+        )}
+
+        {/* Bottom Nav */}
+        <View style={styles.bottomNav}>
+          <TouchableOpacity style={styles.navItem} onPress={() => navigation.navigate('Home')}>
+            <MaterialCommunityIcons name="home" size={24} color="#FFFFFF" />
+            <Text style={styles.navLabelActive}>Home</Text>
           </TouchableOpacity>
-          <TouchableOpacity 
-            style={route.name === 'Tasks' ? styles.navItemActive : styles.navItem}
-            onPress={() => navigation.navigate('Tasks')}
-          >
-            <MaterialCommunityIcons name="file-document-outline" size={24} color={route.name === 'Tasks' ? '#FFFFFF' : '#B0B0B0'} />
-            <Text style={route.name === 'Tasks' ? styles.navLabelActive : styles.navLabel}>Tasks</Text>
+          <TouchableOpacity style={styles.navItem} onPress={() => navigation.navigate('Calendar')}>
+            <MaterialCommunityIcons name="calendar" size={24} color="#B0B0B0" />
+            <Text style={styles.navLabel}>Calendar</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.navItemActive} onPress={() => navigation.navigate('Chat')}>
+            <MaterialCommunityIcons name="chat" size={24} color="#B0B0B0" />
+            {hasUnreadSuggestions && <View style={styles.unreadDot} />}
+            <Text style={styles.navLabel}>Chat</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.navItem} onPress={() => navigation.navigate('Projects')}>
+            <MaterialCommunityIcons name="file-document-outline" size={24} color="#B0B0B0" />
+            <Text style={styles.navLabel}>Projects</Text>
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
@@ -203,120 +174,44 @@ const ChatScreen = () => {
 };
 
 const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: '#121212',
-  },
-  container: {
-    flex: 1,
-    backgroundColor: '#121212',
-    paddingTop: 48,
-  },
-  header: {
+  safeArea: { flex: 1, backgroundColor: '#121212' },
+  container: { flex: 1, backgroundColor: '#121212', paddingHorizontal: 16 },
+  headerRow: { flexDirection: 'row', alignItems: 'center', width: '100%', justifyContent: 'space-between', marginTop: 8, marginBottom: 16 },
+  headerRowTopLeft: {
+    display: 'flex',
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    marginBottom: 24,
+    alignItems: 'flex-start',
   },
-  headerTitle: {
-    color: '#e6ecec',
-    fontSize: 24,
-    fontWeight: 'bold',
-  },
-  messagesList: {
-    paddingHorizontal: 20,
-    paddingBottom: 100,
-  },
-  messageContainer: {
-    marginBottom: 16,
-    maxWidth: '80%',
-  },
-  userMessageContainer: {
-    alignSelf: 'flex-end',
-  },
-  assistantMessageContainer: {
-    alignSelf: 'flex-start',
-  },
-  messageBubble: {
-    padding: 16,
-    borderRadius: 16,
-  },
-  userMessageBubble: {
-    backgroundColor: '#181818',
-  },
-  assistantMessageBubble: {
-    backgroundColor: '#131616',
-  },
-  messageText: {
-    color: '#e6ecec',
-    fontSize: 16,
-    lineHeight: 22,
-  },
-  messageTime: {
-    color: '#bfc6c9',
-    fontSize: 12,
-    marginTop: 4,
-    alignSelf: 'flex-end',
-  },
-  inputContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#181818',
-    borderRadius: 24,
-    marginHorizontal: 20,
-    marginBottom: 16,
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-  },
-  micButton: {
-    padding: 8,
-  },
-  input: {
-    flex: 1,
-    color: '#e6ecec',
-    fontSize: 16,
-    marginHorizontal: 8,
-    paddingVertical: 8,
-  },
-  sendButton: {
-    padding: 8,
-  },
-  bottomNav: {
+  headerTitle: {color: '#e0f0f0de', fontSize: 20, fontWeight: '400', marginLeft: 12 },
+  messagesList: { flexGrow: 1, paddingBottom: 16 },
+  messageBubble: { maxWidth: '70%', padding: 12, borderRadius: 12, marginVertical: 4 },
+  userBubble: { backgroundColor: '#1E1E1E', alignSelf: 'flex-end', borderTopRightRadius: 0 },
+  assistantBubble: { backgroundColor: '#2A2A2A', alignSelf: 'flex-start', borderTopLeftRadius: 0 },
+  userText: { fontSize: 16, color: '#FFFFFF' },
+  assistantText: { fontSize: 16, color: '#FFFFFF' },
+  timestamp: { fontSize: 12, color: '#B0B0B0', marginTop: 4, alignSelf: 'flex-end' },
+  quickActionsContainer: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', marginHorizontal: 16, marginBottom: 16 },
+  quickActionBubble: { width: '48%', backgroundColor: '#1E1E1E', borderRadius: 12, padding: 12, marginBottom: 16 },
+  quickActionTitle: { fontSize: 16, fontWeight: '500', color: '#FFFFFF' },
+  quickActionSubtitle: { fontSize: 14, color: '#B0B0B0', marginTop: 4 },
+  inputSection: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#40404033', borderRadius: 8, paddingHorizontal: 12, height: 48, marginBottom: 16 },
+  micIcon: { marginRight: 12 },
+  input: { flex: 1, fontSize: 16, color: '#FFFFFF' },
+  sendIcon: { marginLeft: 12 },
+  typingIndicator: { flexDirection: 'row', justifyContent: 'center', marginVertical: 8 },
+  typingDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#FFFFFF', marginHorizontal: 4 },
+  bottomNav: { 
     flexDirection: 'row',
     justifyContent: 'space-around',
     alignItems: 'center',
     backgroundColor: '#121212',
     paddingVertical: 12,
-    borderTopWidth: 1,
-    borderTopColor: '#2A2A2A',
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
   },
-  navItem: {
-    alignItems: 'center',
-    opacity: 0.6,
-  },
-  navItemActive: {
-    alignItems: 'center',
-    backgroundColor: '#1E1E1E',
-    padding: 8,
-    borderRadius: 12,
-    opacity: 1,
-  },
-  navLabel: {
-    color: '#bfc6c9',
-    fontSize: 12,
-    marginTop: 4,
-  },
-  navLabelActive: {
-    color: '#e6ecec',
-    fontSize: 12,
-    marginTop: 4,
-    fontWeight: 'bold',
-  },
+  navItem: { alignItems: 'center', opacity: 0.6 },
+  navItemActive: { alignItems: 'center', backgroundColor: '#1E1E1E', padding: 8, borderRadius: 12, opacity: 1 },
+  navLabel: { color: '#B0B0B0', fontSize: 12, marginTop: 4 },
+  navLabelActive: { color: '#FFFFFF', fontSize: 12, marginTop: 4, fontWeight: '600' },
+  unreadDot: { position: 'absolute', top: 4, right: 16, width: 8, height: 8, borderRadius: 4, backgroundColor: '#00E0B0' },
 });
 
 export default ChatScreen;
