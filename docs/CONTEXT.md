@@ -15,6 +15,40 @@ This document outlines the high-level context for the ScheduleFlow MVP (new) pro
 - **Pending Tasks Card:** Fetch incomplete tasks via /api/tasks?state=pending.
 - **Chat Prompt Badge:** Query /api/suggestions?read=false to show a blue dot on the Chat tab.
 - **Input Bar:** Sends text to /api/chat; on success, the response is inserted into history and rendered as a new bubble.
+- **Message Container (Status Updates):** 
+
+Use cases: 
+   - Success messages (e.g., "Successfully switched to tomorrow's schedule")
+   - Error messages (e.g., "Unable to update schedule view")
+Note: These update messages will appear according to the context of the user input which will be decided and implemented by AI
+
+   Behavior:
+   - Appears dynamically when needed
+   - 2-second auto-dismiss with visual progress indicator
+   - Manual dismiss via close button
+   - Non-intrusive, temporary display
+- **Dynamic Purpose Bar (formerly Chat Teaser)**
+   - **Use Cases:**
+  1. **Client Query Display:**
+     - Shows extracted client queries from emails
+     - Displays pending AI updates from chat screen
+     - Presents verification requests for AI suggestions
+  2. **AI Suggestions:**
+     - Proactive recommendations for projects and schedules
+     - Action items requiring user attention
+     - Priority-based content display
+   - **Behavior:**
+      - Content dynamically updates based on priority
+      - AI determines content priority based on:
+         - Pending client queries
+         - Unverified AI suggestions
+         - Schedule confirmations
+         - Project updates
+      - Interactive elements allow users to:
+         - Copy suggestions to input chat
+         - Request AI assistance
+         - Take immediate action
+         - Dismiss or ignore
 
 ### Calendar Screen
 
