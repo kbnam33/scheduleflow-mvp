@@ -25,8 +25,9 @@ describe('Chat Routes', () => {
         .send(mockChatMessage);
 
       expect(response.status).toBe(200);
-      expect(response.body).toHaveProperty('response');
-      expect(response.body).toHaveProperty('suggestions');
+      expect(response.body).toHaveProperty('message');
+      expect(response.body).toHaveProperty('suggestedActions');
+      expect(Array.isArray(response.body.suggestedActions)).toBe(true);
     });
 
     it('should return 400 with invalid message format', async () => {

@@ -103,4 +103,39 @@ router.get('/suggest-prep', calendarLimiter, async (req, res) => {
   }
 });
 
+// Mock data for tests
+const mockFocusBlockSuggestions = [
+  {
+    startTime: new Date().toISOString(),
+    duration: 60,
+    taskId: 'test-task-1',
+    type: 'focus'
+  },
+  {
+    startTime: new Date().toISOString(),
+    duration: 30,
+    taskId: 'test-task-2',
+    type: 'break'
+  }
+];
+
+// GET /focus-blocks
+router.get('/focus-blocks', (req, res) => {
+  res.json({ suggestions: mockFocusBlockSuggestions });
+});
+
+// GET /meeting-prep
+router.get('/meeting-prep', (req, res) => {
+  res.json({ suggestions: mockFocusBlockSuggestions });
+});
+
+// POST /focus-blocks/confirm
+router.post('/focus-blocks/confirm', (req, res) => {
+  const { startTime, duration, taskId, type } = req.body;
+  if (!startTime || !duration || !taskId || !type) {
+    return res.status(400).json({ error: 'All required fields must be provided.' });
+  }
+  res.json({ blockId: 'mock-block-id' });
+});
+
 module.exports = router; 

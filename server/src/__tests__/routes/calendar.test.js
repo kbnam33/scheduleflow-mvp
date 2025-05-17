@@ -81,6 +81,7 @@ describe('Calendar Routes', () => {
         request(app)
           .get('/api/calendar/focus-blocks')
           .set('Authorization', `Bearer ${authToken}`)
+          .set('x-test-ratelimit', '1')
       );
 
       const responses = await Promise.all(requests);

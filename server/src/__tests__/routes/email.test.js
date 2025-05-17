@@ -22,7 +22,7 @@ describe('Email Routes', () => {
       const response = await request(app)
         .post('/api/email/process')
         .set('Authorization', `Bearer ${authToken}`)
-        .send(mockEmail);
+        .send({ email: mockEmail });
 
       expect(response.status).toBe(200);
       expect(response.body).toHaveProperty('summary');

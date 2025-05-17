@@ -9,10 +9,13 @@ module.exports = {
     '/coverage/',
     '/logs/'
   ],
-  setupFiles: ['<rootDir>/src/__tests__/setup.js'],
+  setupFilesAfterEnv: ['<rootDir>/src/__tests__/setup.js'],
   verbose: true,
   testTimeout: 10000,
   transform: {
     '^.+\\.js$': 'babel-jest'
+  },
+  globals: {
+    'jest': true
   }
 }; 

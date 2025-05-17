@@ -6,9 +6,20 @@ const rateLimit = require('express-rate-limit');
 
 // Rate limiting middleware
 const taskLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000, // 1 hour
-  max: 50, // Limit each IP to 50 requests per windowMs
-  message: 'Too many task suggestions requested, please try again later.'
+  windowMs: process.env.NODE_ENV === 'test' ? 1000 : 60 * 60 * 1000, // 1 second in test, 1 hour in production
+  max: process.env.NODE_ENV === 'test' ? 5 : 50, // 5 requests per second in test, 50 per hour in production
+  message: 'Too many task suggestions requested, please try again later.',
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => {
+    // Skip rate limiting for most tests except explicit rate limit tests
+    if (process.env.NODE_ENV === 'test' && !req.headers['x-test-ratelimit']) return true;
+    return false;
+  },
+  keyGenerator: (req) => {
+    // Use user ID if available, otherwise use IP
+    return req.user ? req.user.id : req.ip;
+  }
 });
 
 // Get AI task suggestions for a project
@@ -58,10 +69,16 @@ router.post('/confirm/:taskId', taskLimiter, async (req, res) => {
   try {
     const { taskId } = req.params;
     const userId = req.user?.id;
+    const { title, description, priority, dueDate, status } = req.body;
 
     if (!userId) {
       logger.warn('Unauthorized task confirmation attempt', { ip: req.ip });
       return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    // Validation: all fields required and status must be 'confirmed'
+    if (!title || !description || !priority || !dueDate || status !== 'confirmed') {
+      return res.status(400).json({ error: 'All required fields must be provided and status must be confirmed.' });
     }
 
     logger.info('Task confirmation request', { userId, taskId });

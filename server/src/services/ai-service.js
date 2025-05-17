@@ -1,14 +1,17 @@
 // AI Service for ScheduleFlow MVP
 // This service handles all interactions with OpenAI API
 
-const { OpenAI } = require('openai');
+const { Configuration, OpenAIApi } = require('openai');
 const supabase = require('../config/supabase');
 const logger = require('../utils/logger');
+const AIContext = require('../models/AIContext');
+const UserPreferences = require('../models/UserPreferences');
 
 // Initialize OpenAI client
-const openai = new OpenAI({
+const configuration = new Configuration({
   apiKey: process.env.OPENAI_API_KEY,
 });
+const openai = new OpenAIApi(configuration);
 
 /**
  * AI Service for handling all OpenAI interactions
@@ -23,127 +26,42 @@ class AIService {
    */
   async processChat(userId, message, context = {}) {
     try {
-      // Fetch recent chat history for context
-      const { data: chatHistory, error } = await supabase
-        .from('chat_history')
-        .select('*')
-        .eq('user_id', userId)
-        .order('created_at', { ascending: false })
-        .limit(10);
-
-      if (error) {
-        logger.error('Error fetching chat history:', error);
-        throw new Error('Failed to fetch chat history');
-      }
-
-      // Format chat history for OpenAI
-      const formattedHistory = chatHistory
-        .reverse()
-        .map(chat => ({
-          role: chat.is_user ? 'user' : 'assistant',
-          content: chat.message
-        }));
-
-      // Prepare system message with user context
-      const systemMessage = await this.prepareSystemMessage(userId, context);
-
-      // Combine all messages
-      const messages = [
-        { role: 'system', content: systemMessage },
-        ...formattedHistory,
-        { role: 'user', content: message }
-      ];
-
-      // Call OpenAI API
-      const response = await openai.chat.completions.create({
-        model: 'gpt-4-turbo',
-        messages,
+      const contextForAI = await AIContext.getContextForAI(userId);
+      
+      const completion = await openai.createChatCompletion({
+        model: "gpt-4",
+        messages: [
+          {
+            role: "system",
+            content: `You are an AI assistant for ScheduleFlow. 
+            User preferences: ${JSON.stringify(contextForAI.preferences)}
+            Work pattern: ${JSON.stringify(contextForAI.workPattern)}
+            Project preferences: ${JSON.stringify(contextForAI.projectPreference)}
+            Communication style: ${JSON.stringify(contextForAI.communicationStyle)}`
+          },
+          { role: "user", content: message }
+        ],
         temperature: 0.7,
-        max_tokens: 1000,
+        max_tokens: 500
       });
 
-      // Extract response content
-      const aiResponse = response.choices[0].message.content;
-
-      // Save the conversation to the database
-      await this.saveConversation(userId, message, aiResponse, context);
+      const response = completion.data.choices[0].message.content;
+      
+      // Log the interaction
+      await AIContext.updateContext(
+        userId,
+        'communication_style',
+        { lastInteraction: new Date().toISOString(), message, response },
+        AIContext.calculateConfidenceScore({ message, response })
+      );
 
       return {
-        message: aiResponse,
-        suggestedActions: this.extractSuggestedActions(aiResponse)
+        message: response,
+        suggestedActions: this.extractSuggestedActions(response)
       };
     } catch (error) {
-      logger.error('Error in AI chat processing:', error);
-      return {
-        message: "I'm having trouble connecting right now. Please try again in a moment.",
-        error: true
-      };
-    }
-  }
-
-  /**
-   * Prepare the system message with user context
-   * @param {string} userId - User ID
-   * @param {Object} context - Additional context
-   * @returns {Promise<string>} - System message
-   */
-  async prepareSystemMessage(userId, context) {
-    try {
-      // Fetch user details
-      const { data: user } = await supabase
-        .from('users')
-        .select('*')
-        .eq('id', userId)
-        .single();
-
-      // Fetch upcoming meetings
-      const { data: meetings } = await supabase
-        .from('meetings')
-        .select('*')
-        .eq('user_id', userId)
-        .gte('start_time', new Date().toISOString())
-        .order('start_time', { ascending: true })
-        .limit(5);
-
-      // Fetch pending tasks
-      const { data: tasks } = await supabase
-        .from('tasks')
-        .select('*')
-        .eq('user_id', userId)
-        .eq('status', 'pending')
-        .order('priority', { ascending: false })
-        .limit(10);
-
-      // Construct system message
-      const systemMessage = `
-You are ScheduleFlow, an intelligent AI assistant for creative freelancers. You help with scheduling, task management, and project organization. 
-
-USER INFORMATION:
-- Name: ${user.full_name}
-- Profession: ${user.profession || 'Creative Freelancer'}
-- Preferences: ${JSON.stringify(user.creative_preferences || {})}
-
-CONTEXT:
-${meetings && meetings.length > 0 ? `- Upcoming Meetings: ${meetings.length}` : '- No upcoming meetings'}
-${tasks && tasks.length > 0 ? `- Pending Tasks: ${tasks.length}` : '- No pending tasks'}
-${context.currentProject ? `- Current Project: ${context.currentProject.name}` : ''}
-
-Your goal is to help the user stay in their creative flow by managing their schedule and tasks. Be proactive with suggestions but concise in your responses. You can suggest:
-1. Focus blocks for deep work
-2. Preparation time for meetings
-3. Task prioritization
-4. Project organization
-
-For scheduling, suggest specific times based on their calendar. For tasks, be concrete and actionable.
-
-Keep responses friendly but brief. If asked about features beyond your capabilities, explain what you can do instead.
-`;
-
-      return systemMessage;
-    } catch (error) {
-      logger.error('Error preparing system message:', error);
-      // Return a default system message if error occurs
-      return `You are ScheduleFlow, an intelligent AI assistant for creative freelancers. Help the user with scheduling, task management, and project organization.`;
+      logger.error('Error processing chat:', error);
+      throw error;
     }
   }
 
@@ -155,54 +73,21 @@ Keep responses friendly but brief. If asked about features beyond your capabilit
   extractSuggestedActions(response) {
     const actions = [];
     
-    // Check for scheduling suggestions
-    if (response.includes('schedule') || response.includes('block time') || response.includes('focus block')) {
+    if (response.toLowerCase().includes('schedule')) {
       actions.push({
         type: 'SCHEDULE_FOCUS_BLOCK',
         description: 'Create a focus block in your calendar'
       });
     }
     
-    // Check for task suggestions
-    if (response.includes('task') || response.includes('to-do') || response.includes('todo')) {
+    if (response.toLowerCase().includes('task')) {
       actions.push({
         type: 'CREATE_TASK',
         description: 'Add this as a task'
       });
     }
-    
-    return actions;
-  }
 
-  /**
-   * Save conversation to database
-   * @param {string} userId - User ID
-   * @param {string} userMessage - User's message
-   * @param {string} aiResponse - AI response
-   * @param {Object} context - Conversation context
-   */
-  async saveConversation(userId, userMessage, aiResponse, context) {
-    try {
-      // Save user message
-      await supabase.from('chat_history').insert({
-        user_id: userId,
-        message: userMessage,
-        is_user: true,
-        related_project_id: context.projectId || null,
-        related_context: context
-      });
-      
-      // Save AI response
-      await supabase.from('chat_history').insert({
-        user_id: userId,
-        message: aiResponse,
-        is_user: false,
-        related_project_id: context.projectId || null,
-        related_context: context
-      });
-    } catch (error) {
-      logger.error('Error saving conversation:', error);
-    }
+    return actions;
   }
 
   /**
@@ -213,72 +98,54 @@ Keep responses friendly but brief. If asked about features beyond your capabilit
    */
   async generateTaskSuggestions(userId, projectId) {
     try {
-      // Fetch project details
-      const { data: project } = await supabase
-        .from('projects')
-        .select('*')
-        .eq('id', projectId)
-        .single();
-      
-      if (!project) {
-        throw new Error('Project not found');
-      }
-      
-      // Fetch existing tasks for context
-      const { data: existingTasks } = await supabase
-        .from('tasks')
-        .select('*')
-        .eq('project_id', projectId);
-      
-      // Prepare prompt for OpenAI
+      const context = await AIContext.getContextForAI(userId);
+      const preferences = await UserPreferences.getPreferences(userId);
+
       const prompt = `
-Based on this creative project, suggest 5 specific tasks that would help complete it.
+        Given the following context:
+        Project ID: ${projectId}
+        User preferences: ${JSON.stringify(preferences)}
+        Work pattern: ${JSON.stringify(context.workPattern)}
+        Project preferences: ${JSON.stringify(context.projectPreference)}
 
-PROJECT DETAILS:
-- Name: ${project.name}
-- Description: ${project.description || 'No description'}
-- Client: ${project.client_name || 'No client specified'}
-- Deadline: ${project.deadline ? new Date(project.deadline).toLocaleDateString() : 'No deadline'}
+        Generate a list of suggested tasks for this project. Consider:
+        1. User's work hours and preferences
+        2. Project complexity and scope
+        3. Priority levels and dependencies
+        4. Estimated time requirements
 
-EXISTING TASKS (DO NOT DUPLICATE):
-${existingTasks && existingTasks.length > 0 
-  ? existingTasks.map(task => `- ${task.title}`).join('\n')
-  : 'No existing tasks.'}
+        Return as JSON array with format:
+        [{
+          "title": "Task name",
+          "description": "Detailed description",
+          "priority": "high|medium|low",
+          "estimatedHours": number,
+          "deadline": "ISO date",
+          "tags": ["tag1", "tag2"]
+        }]
+      `;
 
-Suggest 5 specific, actionable tasks that would help complete this project successfully. For each task, include:
-1. A clear, concise title (10 words or less)
-2. A brief description (1-2 sentences)
-3. Estimated hours to complete (1-8)
-4. Priority level (high, medium, low)
-
-Format each task in JSON without explanation:
-`;
-
-      // Call OpenAI API
-      const response = await openai.chat.completions.create({
-        model: 'gpt-4-turbo',
-        messages: [
-          { role: 'system', content: 'You are a project management assistant that helps creative freelancers plan their projects effectively.' },
-          { role: 'user', content: prompt }
-        ],
-        temperature: 0.7,
+      const completion = await openai.createCompletion({
+        model: "gpt-4",
+        prompt,
         max_tokens: 1000,
-        response_format: { type: 'json_object' }
+        temperature: 0.5
       });
 
-      // Parse response
-      const content = response.choices[0].message.content;
-      const suggestions = JSON.parse(content).tasks || [];
+      const suggestions = JSON.parse(completion.data.choices[0].text.trim());
       
-      return suggestions.map(task => ({
-        ...task,
-        project_id: projectId,
-        user_id: userId,
-        is_ai_suggested: true
-      }));
+      // Update AI context with the generated suggestions
+      await AIContext.updateContext(
+        userId,
+        'project_preference',
+        { lastTaskGeneration: new Date().toISOString(), projectId, suggestionCount: suggestions.length },
+        AIContext.calculateConfidenceScore(suggestions)
+      );
+
+      return suggestions;
     } catch (error) {
       logger.error('Error generating task suggestions:', error);
-      return [];
+      throw error;
     }
   }
 
@@ -291,234 +158,123 @@ Format each task in JSON without explanation:
    */
   async suggestFocusBlocks(userId, startDate, endDate) {
     try {
-      // Fetch existing time blocks
-      const { data: existingBlocks } = await supabase
-        .from('time_blocks')
-        .select('*')
-        .eq('user_id', userId)
-        .gte('start_time', startDate.toISOString())
-        .lte('end_time', endDate.toISOString());
+      const context = await AIContext.getContextForAI(userId);
+      const preferences = await UserPreferences.getPreferences(userId);
+
+      const prompt = `
+        Given the following context:
+        Date range: ${startDate.toISOString()} to ${endDate.toISOString()}
+        User preferences: ${JSON.stringify(preferences)}
+        Work pattern: ${JSON.stringify(context.workPattern)}
+        Focus time preferences: ${JSON.stringify(context.preferences.focus_time_preferences)}
+
+        Generate focus block suggestions that:
+        1. Respect user's work hours and preferences
+        2. Consider existing tasks and priorities
+        3. Include appropriate breaks
+        4. Optimize for productivity
+
+        Return as JSON array with format:
+        [{
+          "title": "Focus block title",
+          "startTime": "ISO date",
+          "endTime": "ISO date",
+          "priority": "high|medium|low",
+          "type": "focus|break",
+          "relatedTaskId": "task-id or null"
+        }]
+      `;
+
+      const completion = await openai.createCompletion({
+        model: "gpt-4",
+        prompt,
+        max_tokens: 1000,
+        temperature: 0.5
+      });
+
+      const suggestions = JSON.parse(completion.data.choices[0].text.trim());
       
-      // Fetch meetings
-      const { data: meetings } = await supabase
-        .from('meetings')
-        .select('*')
-        .eq('user_id', userId)
-        .gte('start_time', startDate.toISOString())
-        .lte('end_time', endDate.toISOString());
-      
-      // Fetch pending tasks
-      const { data: tasks } = await supabase
-        .from('tasks')
-        .select('*')
-        .eq('user_id', userId)
-        .eq('status', 'pending')
-        .order('priority', { ascending: false });
-      
-      // Fetch user preferences
-      const { data: user } = await supabase
-        .from('users')
-        .select('*')
-        .eq('id', userId)
-        .single();
-      
-      // Prepare data for the algorithm
-      const schedule = {
-        existingBlocks: existingBlocks || [],
-        meetings: meetings || [],
-        tasks: tasks || [],
-        preferences: user?.creative_preferences || {}
-      };
-      
-      // Process schedule to find free slots
-      const availableSlots = this.findAvailableTimeSlots(schedule, startDate, endDate);
-      
-      // Generate focus block suggestions
-      const suggestedBlocks = this.generateFocusBlockSuggestions(
-        availableSlots, 
-        schedule.tasks,
-        schedule.preferences
+      // Update AI context with the generated suggestions
+      await AIContext.updateContext(
+        userId,
+        'work_pattern',
+        { lastFocusBlockGeneration: new Date().toISOString(), suggestionCount: suggestions.length },
+        AIContext.calculateConfidenceScore(suggestions)
       );
-      
-      return suggestedBlocks.map(block => ({
-        ...block,
-        user_id: userId,
-        is_ai_suggested: true,
-        is_confirmed: false
-      }));
+
+      return suggestions;
     } catch (error) {
       logger.error('Error suggesting focus blocks:', error);
-      return [];
+      throw error;
     }
   }
 
   /**
-   * Find available time slots in the schedule
-   * @param {Object} schedule - User's schedule data
-   * @param {Date} startDate - Start date
-   * @param {Date} endDate - End date
-   * @returns {Array} - Available time slots
+   * Process email and generate an appropriate response
+   * @param {string} userId - User ID 
+   * @param {Object} email - Email object with subject, body, sender
+   * @returns {Promise<Object>} - Response data with suggested reply
    */
-  findAvailableTimeSlots(schedule, startDate, endDate) {
-    // Combine all calendar events
-    const allEvents = [
-      ...schedule.existingBlocks,
-      ...schedule.meetings
-    ].map(event => ({
-      start: new Date(event.start_time),
-      end: new Date(event.end_time)
-    })).sort((a, b) => a.start - b.start);
-    
-    // Define working hours (default: 9 AM to 5 PM)
-    const workingHours = {
-      start: 9, // 9 AM
-      end: 17   // 5 PM
-    };
-    
-    // Override with user preferences if available
-    if (schedule.preferences.workingHours) {
-      workingHours.start = schedule.preferences.workingHours.start || workingHours.start;
-      workingHours.end = schedule.preferences.workingHours.end || workingHours.end;
-    }
-    
-    const availableSlots = [];
-    const currentDate = new Date(startDate);
-    
-    // Iterate through each day
-    while (currentDate <= endDate) {
-      // Skip weekends (0 = Sunday, 6 = Saturday)
-      const dayOfWeek = currentDate.getDay();
-      if (dayOfWeek !== 0 && dayOfWeek !== 6) {
-        // Set working hours for the day
-        const dayStart = new Date(currentDate);
-        dayStart.setHours(workingHours.start, 0, 0, 0);
-        
-        const dayEnd = new Date(currentDate);
-        dayEnd.setHours(workingHours.end, 0, 0, 0);
-        
-        // Filter events for current day
-        const dayEvents = allEvents.filter(event => 
-          event.start.toDateString() === currentDate.toDateString()
-        );
-        
-        // Find free slots between events
-        let currentTime = dayStart;
-        
-        for (const event of dayEvents) {
-          // If there's time before the event, add it as an available slot
-          if (event.start > currentTime && event.start - currentTime >= 30 * 60 * 1000) { // 30 min minimum
-            availableSlots.push({
-              start: new Date(currentTime),
-              end: new Date(event.start)
-            });
-          }
-          // Move current time to after this event
-          currentTime = new Date(Math.max(currentTime.getTime(), event.end.getTime()));
-        }
-        
-        // Add time after the last event until end of day
-        if (dayEnd > currentTime && dayEnd - currentTime >= 30 * 60 * 1000) {
-          availableSlots.push({
-            start: new Date(currentTime),
-            end: new Date(dayEnd)
-          });
-        }
-      }
-      
-      // Move to next day
-      currentDate.setDate(currentDate.getDate() + 1);
-      currentDate.setHours(0, 0, 0, 0);
-    }
-    
-    return availableSlots;
-  }
+  async processEmail(userId, emailData) {
+    try {
+      const context = await AIContext.getContextForAI(userId);
 
-  /**
-   * Generate focus block suggestions from available slots
-   * @param {Array} availableSlots - Available time slots
-   * @param {Array} tasks - Pending tasks
-   * @param {Object} preferences - User preferences
-   * @returns {Array} - Suggested focus blocks
-   */
-  generateFocusBlockSuggestions(availableSlots, tasks, preferences) {
-    const suggestedBlocks = [];
-    const minFocusBlockDuration = 60 * 60 * 1000; // 1 hour in milliseconds
-    const optimalFocusBlockDuration = 90 * 60 * 1000; // 1.5 hours in milliseconds
-    
-    // Apply user preferences if available
-    const preferredFocusTime = preferences.optimalFocusTime || optimalFocusBlockDuration / (60 * 60 * 1000);
-    const optimalDuration = preferredFocusTime * 60 * 60 * 1000;
-    
-    // Prioritize high-priority tasks
-    const highPriorityTasks = tasks.filter(task => 
-      task.priority === 'high' || task.priority >= 8
-    );
-    
-    // For each available slot, try to create focus blocks
-    for (const slot of availableSlots) {
-      const slotDuration = slot.end - slot.start;
+      const prompt = `
+        Analyze the following email:
+        From: ${emailData.sender}
+        Subject: ${emailData.subject}
+        Content: ${emailData.body}
+
+        User context:
+        Work pattern: ${JSON.stringify(context.workPattern)}
+        Communication style: ${JSON.stringify(context.communicationStyle)}
+
+        Provide:
+        1. A concise summary
+        2. Action items with priorities
+        3. Suggested calendar events
+        4. Recommended follow-up actions
+
+        Return as JSON with format:
+        {
+          "summary": "Brief summary",
+          "actionItems": [{
+            "title": "Action item",
+            "priority": "high|medium|low",
+            "dueDate": "ISO date or null"
+          }],
+          "calendarEvents": [{
+            "title": "Event title",
+            "startTime": "ISO date",
+            "endTime": "ISO date",
+            "type": "meeting|reminder|task"
+          }],
+          "followUpActions": ["action1", "action2"]
+        }
+      `;
+
+      const completion = await openai.createCompletion({
+        model: "gpt-4",
+        prompt,
+        max_tokens: 1000,
+        temperature: 0.5
+      });
+
+      const analysis = JSON.parse(completion.data.choices[0].text.trim());
       
-      // Skip if slot is too short
-      if (slotDuration < minFocusBlockDuration) {
-        continue;
-      }
-      
-      // Determine how many focus blocks can fit in this slot
-      const numBlocksPossible = Math.floor(slotDuration / optimalDuration);
-      const remainingTime = slotDuration % optimalDuration;
-      
-      // Create optimal focus blocks
-      let currentStart = new Date(slot.start);
-      
-      for (let i = 0; i < numBlocksPossible; i++) {
-        // Find a relevant task if possible
-        const relatedTask = highPriorityTasks.length > 0 
-          ? highPriorityTasks.shift() 
-          : (tasks.length > 0 ? tasks.shift() : null);
-        
-        const blockEnd = new Date(currentStart.getTime() + optimalDuration);
-        
-        suggestedBlocks.push({
-          title: relatedTask 
-            ? `Focus: ${relatedTask.title}` 
-            : 'Deep Work Focus Block',
-          start_time: currentStart.toISOString(),
-          end_time: blockEnd.toISOString(),
-          block_type: 'focus',
-          related_task_id: relatedTask?.id || null,
-          notes: relatedTask 
-            ? `Focus time for: ${relatedTask.title}` 
-            : 'Protected time for deep work'
-        });
-        
-        currentStart = blockEnd;
-      }
-      
-      // Add one more block if there's enough remaining time
-      if (remainingTime >= minFocusBlockDuration) {
-        const relatedTask = highPriorityTasks.length > 0 
-          ? highPriorityTasks.shift() 
-          : (tasks.length > 0 ? tasks.shift() : null);
-        
-        const blockEnd = new Date(currentStart.getTime() + remainingTime);
-        
-        suggestedBlocks.push({
-          title: relatedTask 
-            ? `Focus: ${relatedTask.title}` 
-            : 'Deep Work Focus Block',
-          start_time: currentStart.toISOString(),
-          end_time: blockEnd.toISOString(),
-          block_type: 'focus',
-          related_task_id: relatedTask?.id || null,
-          notes: relatedTask 
-            ? `Focus time for: ${relatedTask.title}` 
-            : 'Protected time for deep work'
-        });
-      }
+      // Update AI context with the email processing
+      await AIContext.updateContext(
+        userId,
+        'communication_style',
+        { lastEmailProcessed: new Date().toISOString(), emailSubject: emailData.subject },
+        AIContext.calculateConfidenceScore(analysis)
+      );
+
+      return analysis;
+    } catch (error) {
+      logger.error('Error processing email:', error);
+      throw error;
     }
-    
-    // Limit number of suggestions to avoid overwhelming the user
-    return suggestedBlocks.slice(0, 5);
   }
 
   /**
@@ -858,130 +614,69 @@ Format each suggestion in JSON without explanation:
   }
 
   /**
-   * Process email and generate an appropriate response
-   * @param {string} userId - User ID 
-   * @param {Object} email - Email object with subject, body, sender
-   * @returns {Promise<Object>} - Response data with suggested reply
+   * Suggest meeting preparation blocks
+   * @param {string} userId - User ID
+   * @param {Object} meetingData - Meeting data
+   * @returns {Promise<Object>} - Suggested prep blocks
    */
-  async processEmail(userId, email) {
+  async suggestMeetingPrep(userId, meetingData) {
     try {
-      // Fetch user details
-      const { data: user } = await supabase
-        .from('users')
-        .select('*')
-        .eq('id', userId)
-        .single();
-      
-      if (!user) {
-        throw new Error('User not found');
-      }
-      
-      // Prepare prompt for OpenAI
+      const context = await AIContext.getContextForAI(userId);
+
       const prompt = `
-Analyze this email and help me respond appropriately:
+        Given the following meeting details:
+        ${JSON.stringify(meetingData)}
 
-FROM: ${email.sender}
-SUBJECT: ${email.subject}
-BODY:
-${email.body}
+        User context:
+        Work pattern: ${JSON.stringify(context.workPattern)}
+        Communication style: ${JSON.stringify(context.communicationStyle)}
 
-First, determine if this is regarding:
-1. A meeting request/scheduling
-2. A project update/feedback request
-3. A general inquiry
-4. Something else (specify)
+        Suggest preparation tasks and focus blocks for this meeting.
+        Consider:
+        1. Meeting type and importance
+        2. Required materials and research
+        3. User's work style and preferences
+        4. Available time before meeting
 
-Then, based on the category:
-- For meeting requests: Suggest available times based on my schedule preferences
-- For project updates: Acknowledge receipt and suggest next steps
-- For inquiries: Provide a professional response that builds client relationships
+        Return as JSON with format:
+        {
+          "preparationTasks": [{
+            "title": "Task title",
+            "description": "Task details",
+            "estimatedMinutes": number,
+            "priority": "high|medium|low"
+          }],
+          "focusBlocks": [{
+            "title": "Focus block title",
+            "startTime": "ISO date",
+            "endTime": "ISO date",
+            "type": "preparation|review"
+          }]
+        }
+      `;
 
-Your response should include:
-1. Email category (from above)
-2. A suggested response that I can send (in a professional, friendly tone)
-3. Any follow-up actions I should take (e.g., schedule a meeting, update project timeline)
-`;
-      
-      // Call OpenAI API
-      const response = await openai.chat.completions.create({
-        model: 'gpt-4-turbo',
-        messages: [
-          { 
-            role: 'system', 
-            content: `You are an email assistant for a creative freelancer (${user.profession || 'designer'}). Your goal is to help them maintain professional client relationships while protecting their creative flow time. Be concise but warm in your suggested responses.` 
-          },
-          { role: 'user', content: prompt }
-        ],
-        temperature: 0.7,
-        max_tokens: 1000
+      const completion = await openai.createCompletion({
+        model: "gpt-4",
+        prompt,
+        max_tokens: 1000,
+        temperature: 0.5
       });
+
+      const suggestions = JSON.parse(completion.data.choices[0].text.trim());
       
-      // Extract and process response
-      const aiResponse = response.choices[0].message.content;
-      
-      // Save to email history
-      await supabase.from('email_history').insert({
-        user_id: userId,
-        sender: email.sender,
-        subject: email.subject,
-        body: email.body,
-        ai_analysis: aiResponse
-      });
-      
-      return {
-        analysis: aiResponse,
-        suggestedActions: this.extractEmailActions(aiResponse, email)
-      };
+      // Update AI context with the meeting prep suggestions
+      await AIContext.updateContext(
+        userId,
+        'work_pattern',
+        { lastMeetingPrep: new Date().toISOString(), meetingId: meetingData.id },
+        AIContext.calculateConfidenceScore(suggestions)
+      );
+
+      return suggestions;
     } catch (error) {
-      logger.error('Error processing email:', error);
-      return {
-        analysis: "I couldn't process this email properly. Please try again later.",
-        error: true
-      };
+      logger.error('Error suggesting meeting prep:', error);
+      throw error;
     }
-  }
-  
-  /**
-   * Extract suggested actions from email analysis
-   * @param {string} analysis - AI analysis of the email
-   * @param {Object} email - Original email object
-   * @returns {Array} - Suggested actions
-   */
-  extractEmailActions(analysis, email) {
-    const actions = [];
-    
-    // Check for meeting-related emails
-    if (analysis.toLowerCase().includes('meeting') || 
-        email.subject.toLowerCase().includes('meeting') ||
-        email.subject.toLowerCase().includes('call') ||
-        analysis.toLowerCase().includes('schedule')) {
-      actions.push({
-        type: 'SCHEDULE_MEETING',
-        description: 'Schedule a meeting based on this email'
-      });
-    }
-    
-    // Check for project-related emails
-    if (analysis.toLowerCase().includes('project') || 
-        analysis.toLowerCase().includes('task') ||
-        email.subject.toLowerCase().includes('project')) {
-      actions.push({
-        type: 'CREATE_TASK',
-        description: 'Create task from this email'
-      });
-    }
-    
-    // Check for follow-up reminders
-    if (analysis.toLowerCase().includes('follow') || 
-        analysis.toLowerCase().includes('respond') ||
-        analysis.toLowerCase().includes('reply')) {
-      actions.push({
-        type: 'SET_REMINDER',
-        description: 'Set a reminder to follow up'
-      });
-    }
-    
-    return actions;
   }
 
   /**
