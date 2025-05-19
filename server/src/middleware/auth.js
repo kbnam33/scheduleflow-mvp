@@ -1,5 +1,13 @@
+// In auth.js
 const jwt = require('jsonwebtoken');
+const { createClient } = require('@supabase/supabase-js');
 const logger = require('../utils/logger');
+
+// Create a Supabase client for JWT verification
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_KEY
+);
 
 class AuthError extends Error {
   constructor(message, status = 401) {
@@ -9,16 +17,6 @@ class AuthError extends Error {
   }
 }
 
-const validateToken = (token) => {
-  if (!token) {
-    throw new AuthError('No token provided');
-  }
-  if (typeof token !== 'string') {
-    throw new AuthError('Invalid token format');
-  }
-  return token;
-};
-
 const authMiddleware = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
@@ -26,8 +24,8 @@ const authMiddleware = async (req, res, next) => {
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       throw new AuthError('No token provided');
     }
-
-    const token = validateToken(authHeader.split(' ')[1]);
+    
+    const token = authHeader.split(' ')[1];
     
     // Special handling for test environment
     if (process.env.NODE_ENV === 'test' && token === 'test-token') {
@@ -40,28 +38,29 @@ const authMiddleware = async (req, res, next) => {
     }
 
     try {
-      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      // Verify using Supabase's JWT approach
+      const { data: { user }, error } = await supabase.auth.getUser(token);
       
-      // Validate decoded token structure
-      if (!decoded.sub || !decoded.role) {
-        throw new AuthError('Invalid token structure');
+      if (error) {
+        throw new AuthError('Invalid token');
       }
-
+      
+      if (!user) {
+        throw new AuthError('User not found');
+      }
+      
       req.user = {
-        id: decoded.sub,
-        email: decoded.email,
-        role: decoded.role
+        id: user.id,
+        email: user.email,
+        role: 'authenticated'
       };
       
       next();
     } catch (error) {
-      if (error instanceof jwt.JsonWebTokenError) {
-        throw new AuthError('Invalid token');
+      if (error instanceof AuthError) {
+        throw error;
       }
-      if (error instanceof jwt.TokenExpiredError) {
-        throw new AuthError('Token expired', 401);
-      }
-      throw error;
+      throw new AuthError('Authentication failed');
     }
   } catch (error) {
     if (error instanceof AuthError) {
@@ -84,4 +83,4 @@ const authMiddleware = async (req, res, next) => {
   }
 };
 
-module.exports = authMiddleware; 
+module.exports = authMiddleware;
