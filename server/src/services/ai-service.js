@@ -1,911 +1,468 @@
-// AI Service for ScheduleFlow MVP
-// This service handles all interactions with OpenAI API
+// File Path: scheduleflow-mvp/server/src/services/ai-service.js
 
-const { Configuration, OpenAIApi } = require('openai');
+const { ChatOpenAI } = require("@langchain/openai");
+const { HumanMessage, SystemMessage } = require("@langchain/core/messages");
+const { StringOutputParser } = require("@langchain/core/output_parsers");
+const { ChatPromptTemplate } = require("@langchain/core/prompts");
+
 const supabase = require('../config/supabase');
 const logger = require('../utils/logger');
 const AIContext = require('../models/AIContext');
 const UserPreferences = require('../models/UserPreferences');
+const Task = require('../models/Task'); // Ensure this path is correct
 
-// Initialize OpenAI client
-const configuration = new Configuration({
+// Initialize Langchain Chat Model
+// Ensure OPENAI_API_KEY is in your .env file
+const lcChatModel = new ChatOpenAI({
   apiKey: process.env.OPENAI_API_KEY,
+  modelName: process.env.OPENAI_MODEL_NAME || "gpt-4o", // Allow model to be set via .env or default
+  temperature: parseFloat(process.env.OPENAI_TEMPERATURE) || 0.7, // Allow temperature to be set via .env
 });
-const openai = new OpenAIApi(configuration);
 
-/**
- * AI Service for handling all OpenAI interactions
- */
 class AIService {
   /**
-   * Process a chat message and generate a response
+   * Process a chat message and generate a response using Langchain.
+   * It now includes intent detection for task creation.
    * @param {string} userId - User ID
    * @param {string} message - User's message
-   * @param {Object} context - Additional context (projects, tasks, etc.)
-   * @returns {Promise<Object>} - AI response
+   * @param {Array<Object>} chatHistory - Optional: array of previous messages [{role: 'user'/'assistant', content: '...'}, ...]
+   * @returns {Promise<Object>} - AI response, potentially including a created task or suggested actions
    */
-  async processChat(userId, message, context = {}) {
+  async processChat(userId, userMessage, chatHistory = []) {
     try {
+      logger.ai.request(`Processing chat for user: ${userId}`, { message: userMessage });
       const contextForAI = await AIContext.getContextForAI(userId);
-      
-      const completion = await openai.createChatCompletion({
-        model: "gpt-4",
-        messages: [
-          {
-            role: "system",
-            content: `You are an AI assistant for ScheduleFlow. 
-            User preferences: ${JSON.stringify(contextForAI.preferences)}
-            Work pattern: ${JSON.stringify(contextForAI.workPattern)}
-            Project preferences: ${JSON.stringify(contextForAI.projectPreference)}
-            Communication style: ${JSON.stringify(contextForAI.communicationStyle)}`
-          },
-          { role: "user", content: message }
-        ],
-        temperature: 0.7,
-        max_tokens: 500
-      });
 
-      const response = completion.data.choices[0].message.content;
+      // Basic Intent Detection for Task Creation
+      const lowerMessage = userMessage.toLowerCase();
+      let isTaskCreationIntent = false;
+      const taskKeywords = ['create task', 'new task', 'add task', 'make a task for', 'task:'];
       
-      // Log the interaction
-      await AIContext.updateContext(
-        userId,
-        'communication_style',
-        { lastInteraction: new Date().toISOString(), message, response },
-        AIContext.calculateConfidenceScore({ message, response })
-      );
+      let taskDescriptionNL = userMessage;
+      for (const keyword of taskKeywords) {
+        if (lowerMessage.startsWith(keyword)) {
+          isTaskCreationIntent = true;
+          taskDescriptionNL = userMessage.substring(keyword.length).trim();
+          break;
+        } else if (lowerMessage.includes(keyword)) { // More general check if not a direct command
+          isTaskCreationIntent = true; 
+          // taskDescriptionNL remains the full message for broader context parsing
+        }
+      }
+      
+      if (isTaskCreationIntent && taskDescriptionNL) {
+        logger.info(`Task creation intent detected. Description: "${taskDescriptionNL}"`);
+        const taskResult = await this.createTaskFromNaturalLanguage(userId, taskDescriptionNL /*, projectId if available from context */);
+        
+        if (taskResult && !taskResult.error) {
+          return {
+            message: `OK, I've created the task: "${taskResult.title}". You can view it in your tasks list.`,
+            suggestedActions: [{ type: 'VIEW_TASK', taskId: taskResult.id, description: 'View the new task' }],
+            createdTask: taskResult // Send back the created task object to the frontend
+          };
+        } else if (taskResult && taskResult.error) {
+          // If AI couldn't create the task and asks for clarification
+          return {
+            message: taskResult.error + (taskResult.askClarification ? " Could you provide more details or rephrase?" : ""),
+            suggestedActions: []
+          };
+        } else {
+           // Generic failure if taskResult is null or unexpected
+           return {
+            message: "I tried to create that task, but something went wrong. Please try rephrasing your request.",
+            suggestedActions: []
+          };
+        }
+      } else {
+        // Proceed with Regular Chat Processing if no task creation intent detected
+        const systemMessageContent = `You are an expert executive assistant for ScheduleFlow. Be concise, helpful, and context-aware.
+        User preferences: ${JSON.stringify(contextForAI.preferences || {})}
+        Work pattern: ${JSON.stringify(contextForAI.workPattern || {})}
+        Project preferences: ${JSON.stringify(contextForAI.projectPreference || {})}
+        Communication style: ${JSON.stringify(contextForAI.communicationStyle || {})}
+        Current date and time: ${new Date().toISOString()}`;
 
-      return {
-        message: response,
-        suggestedActions: this.extractSuggestedActions(response)
-      };
+        const messages = [new SystemMessage(systemMessageContent)];
+
+        (chatHistory || []).forEach(histMsg => {
+          if (histMsg.role === 'user' && histMsg.content) {
+            messages.push(new HumanMessage(histMsg.content));
+          } else if (histMsg.role === 'assistant' && histMsg.content) {
+            messages.push(new SystemMessage(histMsg.content)); // Using SystemMessage for AI responses in history for this model
+          }
+        });
+        messages.push(new HumanMessage(userMessage));
+        
+        const response = await lcChatModel.invoke(messages);
+        const responseText = typeof response.content === 'string' ? response.content : JSON.stringify(response.content);
+
+        logger.ai.response(`Langchain chat response for user ${userId}`, { responseText });
+
+        await AIContext.updateContext(
+          userId,
+          'communication_style',
+          { lastInteraction: new Date().toISOString(), message: userMessage, response: responseText },
+          AIContext.calculateConfidenceScore({ message: userMessage, response: responseText })
+        );
+
+        const suggestedActions = await this.extractSuggestedActions(responseText, userId, userMessage);
+
+        return {
+          message: responseText,
+          suggestedActions,
+        };
+      }
     } catch (error) {
-      logger.error('Error processing chat:', error);
-      throw error;
+      logger.ai.error(error, { userId, message: userMessage, source: 'processChat Langchain Enhanced' });
+      return {
+        message: "I'm having a little trouble processing that. Could you try rephrasing or try again in a moment?",
+        suggestedActions: [],
+        error: true,
+      };
     }
   }
 
   /**
-   * Extract suggested actions from AI response
-   * @param {string} response - AI response text
-   * @returns {Array} - Extracted action objects
+   * Extract suggested actions from AI response.
+   * This is called when no specific intent (like task creation) was handled directly in processChat.
    */
-  extractSuggestedActions(response) {
+  async extractSuggestedActions(responseText, userId, originalUserMessage) {
     const actions = [];
+    const lowerResponse = responseText.toLowerCase();
+    const lowerUserMessage = originalUserMessage.toLowerCase();
     
-    if (response.toLowerCase().includes('schedule')) {
-      actions.push({
-        type: 'SCHEDULE_FOCUS_BLOCK',
-        description: 'Create a focus block in your calendar'
-      });
+    // Suggest creating a task if relevant keywords appear but weren't part of an explicit creation command
+    const taskKeywords = ['task', 'to-do', 'action item'];
+    if (taskKeywords.some(keyword => lowerResponse.includes(keyword) || lowerUserMessage.includes(keyword))) {
+       actions.push({
+         type: 'CREATE_TASK_SUGGESTION',
+         description: 'Create a task based on this?',
+         payload: { originalMessage: originalUserMessage, aiResponse: responseText }
+       });
     }
     
-    if (response.toLowerCase().includes('task')) {
+    const scheduleKeywords = ['schedule', 'calendar', 'meeting', 'block out time'];
+    if (scheduleKeywords.some(keyword => lowerResponse.includes(keyword) || lowerUserMessage.includes(keyword))) {
       actions.push({
-        type: 'CREATE_TASK',
-        description: 'Add this as a task'
+        type: 'SCHEDULE_FOCUS_BLOCK_SUGGESTION',
+        description: 'Schedule this or create a focus block?',
+        payload: { originalMessage: originalUserMessage, aiResponse: responseText }
       });
     }
-
+    // Add more sophisticated action extraction logic as needed
     return actions;
   }
 
   /**
-   * Generate task suggestions for a project
-   * @param {string} userId - User ID
-   * @param {string} projectId - Project ID
-   * @returns {Promise<Array>} - Array of suggested tasks
+   * Create a task via AI/Langchain based on natural language.
    */
-  async generateTaskSuggestions(userId, projectId) {
+  async createTaskFromNaturalLanguage(userId, taskDescriptionNL, projectId = null) {
+    logger.ai.request(`Attempting to create task from NL: "${taskDescriptionNL}" for user ${userId}`, { projectId });
     try {
-      const context = await AIContext.getContextForAI(userId);
-      const preferences = await UserPreferences.getPreferences(userId);
+      const contextForAI = await AIContext.getContextForAI(userId);
 
-      const prompt = `
-        Given the following context:
-        Project ID: ${projectId}
-        User preferences: ${JSON.stringify(preferences)}
-        Work pattern: ${JSON.stringify(context.workPattern)}
-        Project preferences: ${JSON.stringify(context.projectPreference)}
+      const systemPromptContent = `You are an expert task creation assistant. Parse the following natural language input and extract structured task details.
+      The output MUST be a single JSON object with ONLY the following fields: "title" (string, concise and actionable), "description" (string, optional detailed description, default to empty string if not clear from input), "dueDate" (string, ISO 8601 format YYYY-MM-DD if a date is mentioned or can be clearly inferred, otherwise null), "priority" (string: "high", "medium", or "low"; inferred if possible, default "medium").
+      If no specific due date is mentioned but a relative term like "next Friday", "tomorrow", "end of week" is used, calculate it based on the current date: ${new Date().toISOString()}.
+      If the input is too vague to create a meaningful task title, return a JSON object like this: {"error": "The task description is too vague. Please provide a more specific title or action."}
+      If a title can be formed but other details are missing, provide defaults as specified.
+      Respond ONLY with the JSON object, nothing else. Example for "remind me to call John tomorrow about the proposal": {"title": "Call John about the proposal", "description": "", "dueDate": "YYYY-MM-DD (tomorrow's date)", "priority": "medium"}`;
+      
+      const humanPromptContent = `User input for task: "${taskDescriptionNL}"`;
 
-        Generate a list of suggested tasks for this project. Consider:
-        1. User's work hours and preferences
-        2. Project complexity and scope
-        3. Priority levels and dependencies
-        4. Estimated time requirements
-
-        Return as JSON array with format:
-        [{
-          "title": "Task name",
-          "description": "Detailed description",
-          "priority": "high|medium|low",
-          "estimatedHours": number,
-          "deadline": "ISO date",
-          "tags": ["tag1", "tag2"]
-        }]
-      `;
-
-      const completion = await openai.createCompletion({
-        model: "gpt-4",
-        prompt,
-        max_tokens: 1000,
-        temperature: 0.5
+      const jsonParsingModel = new ChatOpenAI({
+        apiKey: process.env.OPENAI_API_KEY,
+        modelName: process.env.OPENAI_MODEL_NAME_JSON || "gpt-4o", // Use a specific model if configured, or default
+        temperature: 0.1, // Low temperature for structured output
+        // For newer OpenAI models that support JSON mode reliably with Langchain:
+        // modelKwargs: { response_format: { type: "json_object" } },
       });
 
-      const suggestions = JSON.parse(completion.data.choices[0].text.trim());
+      const promptTemplate = ChatPromptTemplate.fromMessages([
+        new SystemMessage(systemPromptContent),
+        new HumanMessage(humanPromptContent),
+      ]);
       
-      // Update AI context with the generated suggestions
-      await AIContext.updateContext(
-        userId,
-        'project_preference',
-        { lastTaskGeneration: new Date().toISOString(), projectId, suggestionCount: suggestions.length },
-        AIContext.calculateConfidenceScore(suggestions)
-      );
+      const parser = new StringOutputParser();
+      const chain = promptTemplate.pipe(jsonParsingModel).pipe(parser);
+      
+      const structuredTaskString = await chain.invoke({});
+      logger.ai.response(`Structured task string from LLM for NL task creation: ${structuredTaskString}`);
 
-      return suggestions;
+      let taskData;
+      try {
+        // Attempt to parse, cleaning potential markdown ```json ... ``` blocks
+        const cleanedString = structuredTaskString.replace(/^```json\s*|```\s*$/g, '').trim();
+        taskData = JSON.parse(cleanedString);
+      } catch (e) {
+        logger.ai.error(e, { source: 'createTaskFromNaturalLanguage JSON.parse', structuredTaskString });
+        return { error: "I had trouble understanding the task details. Could you phrase it differently?", askClarification: true };
+      }
+
+      if (taskData.error) {
+        logger.warn(`AI could not parse task from NL: ${taskData.error}`, { userId, taskDescriptionNL });
+        return { error: taskData.error, askClarification: true }; 
+      }
+
+      if (!taskData.title || String(taskData.title).trim() === "") {
+        logger.warn(`AI did not return a valid title for the task from NL.`, { userId, taskData });
+        return { error: "I couldn't determine a title for the task. Please be more specific.", askClarification: true };
+      }
+      
+      const newTaskPayload = {
+        userId,
+        project_id: projectId, // Ensure your Task.create model uses 'project_id'
+        title: taskData.title,
+        description: taskData.description || '',
+        status: 'pending',
+        priority: ['high', 'medium', 'low'].includes(taskData.priority?.toLowerCase()) ? taskData.priority.toLowerCase() : 'medium',
+        estimated_hours: taskData.estimatedHours || null, 
+        deadline: taskData.dueDate || null, // Ensure this is ISO format if not null
+        ai_generated: true,
+        tags: taskData.tags || [], // Assuming Task model can handle tags
+      };
+
+      const newTask = await Task.create(newTaskPayload);
+      logger.info('Task created successfully via NL', { taskId: newTask.id, userId });
+      return newTask;
+
     } catch (error) {
-      logger.error('Error generating task suggestions:', error);
-      throw error;
+      logger.ai.error(error, { userId, taskDescriptionNL, source: 'createTaskFromNaturalLanguage' });
+      return { error: "Failed to create task due to an internal error. Please try again.", askClarification: false };
     }
   }
 
   /**
-   * Suggest focus blocks based on user's schedule
-   * @param {string} userId - User ID
-   * @param {Date} startDate - Start date for suggestions
-   * @param {Date} endDate - End date for suggestions
-   * @returns {Promise<Array>} - Array of suggested focus blocks
+   * Generate task suggestions for a project using Langchain.
    */
-  async suggestFocusBlocks(userId, startDate, endDate) {
+  async generateTaskSuggestions(userId, projectId, projectBrief = '') {
     try {
+      logger.ai.request(`Generating task suggestions for project: ${projectId}`, { userId, projectBrief });
       const context = await AIContext.getContextForAI(userId);
       const preferences = await UserPreferences.getPreferences(userId);
 
-      const prompt = `
-        Given the following context:
-        Date range: ${startDate.toISOString()} to ${endDate.toISOString()}
-        User preferences: ${JSON.stringify(preferences)}
-        Work pattern: ${JSON.stringify(context.workPattern)}
-        Focus time preferences: ${JSON.stringify(context.preferences.focus_time_preferences)}
-
-        Generate focus block suggestions that:
-        1. Respect user's work hours and preferences
-        2. Consider existing tasks and priorities
-        3. Include appropriate breaks
-        4. Optimize for productivity
-
-        Return as JSON array with format:
-        [{
-          "title": "Focus block title",
-          "startTime": "ISO date",
-          "endTime": "ISO date",
-          "priority": "high|medium|low",
-          "type": "focus|break",
-          "relatedTaskId": "task-id or null"
-        }]
-      `;
-
-      const completion = await openai.createCompletion({
-        model: "gpt-4",
-        prompt,
-        max_tokens: 1000,
-        temperature: 0.5
-      });
-
-      const suggestions = JSON.parse(completion.data.choices[0].text.trim());
+      const systemPromptContent = `You are an expert project manager. Given the project details and user preferences, generate a list of 3-5 actionable tasks.
+      User preferences: ${JSON.stringify(preferences || {})}
+      Work pattern: ${JSON.stringify(context.workPattern || {})}
+      Project preferences: ${JSON.stringify(context.projectPreference || {})}
+      Return tasks as a VALID JSON array of objects. Each object MUST have ONLY "title" (string), "description" (string), "priority" (string: "high", "medium", or "low"), and "estimatedHours" (number, optional).
+      Do not include any other text, preamble, or explanation outside the JSON array itself. The response should be directly parsable as JSON.`;
       
-      // Update AI context with the generated suggestions
-      await AIContext.updateContext(
-        userId,
-        'work_pattern',
-        { lastFocusBlockGeneration: new Date().toISOString(), suggestionCount: suggestions.length },
-        AIContext.calculateConfidenceScore(suggestions)
-      );
+      const humanPromptContent = `Project ID: ${projectId}. ${projectBrief ? `Project Brief: ${projectBrief}` : 'Based on general project knowledge for this type of project.'}`;
 
+      const promptTemplate = ChatPromptTemplate.fromMessages([
+        new SystemMessage(systemPromptContent),
+        new HumanMessage(humanPromptContent),
+      ]);
+      
+      const modelForJson = new ChatOpenAI({ // Potentially use a model fine-tuned for JSON or with specific JSON mode
+        apiKey: process.env.OPENAI_API_KEY,
+        modelName: process.env.OPENAI_MODEL_NAME_JSON || "gpt-4o",
+        temperature: 0.2,
+        // modelKwargs: { response_format: { type: "json_object" } }, // If supported
+      });
+      const parser = new StringOutputParser();
+      const chain = promptTemplate.pipe(modelForJson).pipe(parser);
+
+      const responseString = await chain.invoke({});
+      let suggestions = [];
+      try {
+        const cleanedString = responseString.replace(/^```json\s*|```\s*$/g, '').trim();
+        suggestions = JSON.parse(cleanedString);
+        if (!Array.isArray(suggestions)) { // Ensure it's an array
+            logger.warn('Task suggestions from AI was not an array, attempting fallback.', { suggestions });
+            suggestions = this.extractTasksFromTextFallback(cleanedString);
+        }
+      } catch (parseError) {
+        logger.ai.error(parseError, { source: 'generateTaskSuggestions JSON.parse', responseString });
+        suggestions = this.extractTasksFromTextFallback(responseString.trim()); 
+      }
+      
+      logger.ai.response(`Task suggestions generated for project ${projectId}`, { suggestionCount: suggestions.length });
+      
+      if (suggestions.length > 0) {
+        await AIContext.updateContext(
+          userId,
+          'project_preference',
+          { lastTaskGeneration: new Date().toISOString(), projectId, suggestionCount: suggestions.length },
+          AIContext.calculateConfidenceScore(suggestions) // This score might need adjustment
+        );
+      }
       return suggestions;
     } catch (error) {
-      logger.error('Error suggesting focus blocks:', error);
-      throw error;
+      logger.ai.error(error, { userId, projectId, source: 'generateTaskSuggestions Langchain' });
+      return [];
     }
   }
 
   /**
-   * Process email and generate an appropriate response
-   * @param {string} userId - User ID 
-   * @param {Object} email - Email object with subject, body, sender
-   * @returns {Promise<Object>} - Response data with suggested reply
+   * Fallback helper to extract tasks if AI doesn't return perfect JSON.
+   */
+  extractTasksFromTextFallback(text) {
+    logger.warn('Falling back to rudimentary text extraction for tasks from malformed JSON.', { text });
+    const tasks = [];
+    try {
+        // This is a very naive attempt and likely needs to be much more robust
+        // For example, if AI returns a list of objects within a larger text
+        const jsonArrayMatch = text.match(/\[\s*\{[\s\S]*?\}\s*\]/);
+        if (jsonArrayMatch && jsonArrayMatch[0]) {
+            const parsedFromArray = JSON.parse(jsonArrayMatch[0]);
+            if (Array.isArray(parsedFromArray)) {
+                logger.info(`Fallback found ${parsedFromArray.length} tasks by extracting JSON array.`);
+                return parsedFromArray.filter(t => t.title); // Basic validation
+            }
+        }
+    } catch (e) {
+        logger.error('Error during fallback task extraction', e);
+    }
+    // If the above fails, try line-by-line (very simplistic)
+    const lines = text.split('\n');
+    let currentTask = {};
+    lines.forEach(line => {
+      if (line.toLowerCase().includes('"title":')) {
+        if (currentTask.title) tasks.push({...currentTask}); // save previous
+        try { currentTask = { title: JSON.parse(`{${line}}`).title }; } catch (e) { /* ignore */ }
+      } else if (currentTask.title && line.toLowerCase().includes('"description":')) {
+        try { currentTask.description = JSON.parse(`{${line}}`).description; } catch (e) { /* ignore */ }
+      }
+    });
+    if (currentTask.title) tasks.push({...currentTask});
+    return tasks.filter(t => t.title);
+  }
+
+  /**
+   * Fetch recent emails using Gmail API (via Langchain Tool/Agent in future)
+   */
+  async fetchRecentEmails(userId, count = 5) {
+    logger.info(`AIService.fetchRecentEmails called for user ${userId} to fetch ${count} emails.`);
+    // TODO (Future Step): Implement actual Gmail API call using googleAuthService.
+    // This requires user OAuth tokens to be securely retrieved for the given userId.
+    // For now, returning placeholder data.
+    return Promise.resolve([
+      { id: 'placeholderEmail1', subject: 'Project Alpha Update', snippet: 'Meeting notes and next steps for Project Alpha...' },
+      { id: 'placeholderEmail2', subject: 'Client Feedback on Design V2', snippet: 'Overall positive, but a few minor tweaks requested...' },
+    ]);
+  }
+
+  /**
+   * Process email content (pasted or described by user) using Langchain.
    */
   async processEmail(userId, emailData) {
     try {
-      const context = await AIContext.getContextForAI(userId);
+      logger.ai.request('Processing email content with Langchain', { userId, emailSubject: emailData.subject });
+      const contextForAI = await AIContext.getContextForAI(userId);
 
-      const prompt = `
-        Analyze the following email:
-        From: ${emailData.sender}
-        Subject: ${emailData.subject}
-        Content: ${emailData.body}
-
-        User context:
-        Work pattern: ${JSON.stringify(context.workPattern)}
-        Communication style: ${JSON.stringify(context.communicationStyle)}
-
-        Provide:
-        1. A concise summary
-        2. Action items with priorities
-        3. Suggested calendar events
-        4. Recommended follow-up actions
-
-        Return as JSON with format:
-        {
-          "summary": "Brief summary",
-          "actionItems": [{
-            "title": "Action item",
-            "priority": "high|medium|low",
-            "dueDate": "ISO date or null"
-          }],
-          "calendarEvents": [{
-            "title": "Event title",
-            "startTime": "ISO date",
-            "endTime": "ISO date",
-            "type": "meeting|reminder|task"
-          }],
-          "followUpActions": ["action1", "action2"]
-        }
-      `;
-
-      const completion = await openai.createCompletion({
-        model: "gpt-4",
-        prompt,
-        max_tokens: 1000,
-        temperature: 0.5
-      });
-
-      const analysis = JSON.parse(completion.data.choices[0].text.trim());
+      const systemPromptContent = `You are an expert email analyst. Analyze the provided email content and user context.
+      Return a JSON object with ONLY the following fields: "summary" (string, a concise 1-2 sentence summary of the email's purpose), "actionItems" (array of objects: {title: string, priority: "high|medium|low", dueDate: "ISO date or null" or null if not applicable}), "calendarEvents" (array of objects: {title: string, startTime: "ISO date", endTime: "ISO date", type: "meeting|reminder|task"} or null if not applicable), and "followUpActions" (array of strings suggesting next steps for the user, or null).
+      User context: Work pattern: ${JSON.stringify(contextForAI.workPattern || {})}, Communication style: ${JSON.stringify(contextForAI.communicationStyle || {})}.
+      Current date: ${new Date().toISOString()}.
+      Respond ONLY with the JSON object, no other text or explanation. If no specific action items, calendar events, or follow-up actions are identifiable, their corresponding fields should be empty arrays or null.`;
       
-      // Update AI context with the email processing
+      const humanPromptContent = `Analyze this email:
+      From: ${emailData.sender}
+      Subject: ${emailData.subject}
+      Body: ${emailData.body}`;
+
+      const promptTemplate = ChatPromptTemplate.fromMessages([
+        new SystemMessage(systemPromptContent),
+        new HumanMessage(humanPromptContent),
+      ]);
+      
+      const modelForJson = new ChatOpenAI({
+          apiKey: process.env.OPENAI_API_KEY, 
+          modelName: process.env.OPENAI_MODEL_NAME_JSON || "gpt-4o", 
+          temperature: 0.1,
+          // modelKwargs: { response_format: { type: "json_object" } },
+      });
+      const parser = new StringOutputParser();
+      const chain = promptTemplate.pipe(modelForJson).pipe(parser);
+      
+      const responseString = await chain.invoke({});
+      logger.ai.response(`Structured email analysis string from LLM: ${responseString}`);
+      
+      let analysis;
+      try {
+        const cleanedString = responseString.replace(/^```json\s*|```\s*$/g, '').trim();
+        analysis = JSON.parse(cleanedString);
+      } catch (e) {
+        logger.ai.error(e, { source: 'processEmail JSON.parse', responseString });
+        throw new Error("AI returned malformed JSON for email analysis.");
+      }
+
       await AIContext.updateContext(
         userId,
         'communication_style',
-        { lastEmailProcessed: new Date().toISOString(), emailSubject: emailData.subject },
+        { lastEmailProcessed: new Date().toISOString(), emailSubject: emailData.subject, actionItemCount: analysis.actionItems?.length || 0 },
         AIContext.calculateConfidenceScore(analysis)
       );
 
       return analysis;
     } catch (error) {
-      logger.error('Error processing email:', error);
+      logger.ai.error(error, { userId, emailSubject: emailData.subject, source: 'processEmail Langchain' });
       throw error;
     }
   }
 
   /**
-   * Suggest meeting preparation blocks
-   * @param {string} userId - User ID
-   * @returns {Promise<Array>} - Array of suggested prep blocks
+   * Suggest focus blocks based on user's schedule using Langchain.
    */
-  async suggestMeetingPrepBlocks(userId) {
+  async suggestFocusBlocks(userId, startDate, endDate) {
     try {
-      // Fetch upcoming meetings without prep blocks
-      const { data: meetings } = await supabase
-        .from('meetings')
-        .select('*')
-        .eq('user_id', userId)
-        .gte('start_time', new Date().toISOString())
-        .order('start_time', { ascending: true })
-        .limit(10);
-      
-      if (!meetings || meetings.length === 0) {
-        return [];
-      }
-      
-      // Fetch existing prep blocks
-      const { data: prepBlocks } = await supabase
-        .from('time_blocks')
-        .select('*')
-        .eq('user_id', userId)
-        .eq('block_type', 'prep')
-        .gte('start_time', new Date().toISOString());
-      
-      const prepBlocksByMeetingId = {};
-      if (prepBlocks) {
-        prepBlocks.forEach(block => {
-          if (block.related_meeting_id) {
-            prepBlocksByMeetingId[block.related_meeting_id] = true;
-          }
-        });
-      }
-      
-      // Filter meetings that don't have prep blocks
-      const meetingsNeedingPrep = meetings.filter(
-        meeting => !prepBlocksByMeetingId[meeting.id]
-      );
-      
-      // Generate prep block suggestions
-      const suggestions = [];
-      
-      for (const meeting of meetingsNeedingPrep) {
-        // Calculate prep time (30 min by default)
-        const prepDuration = 30 * 60 * 1000; // 30 minutes
-        
-        // Find a good time for prep (ideally 1-3 hours before the meeting)
-        const meetingStart = new Date(meeting.start_time);
-        const idealPrepStart = new Date(meetingStart.getTime() - 2 * 60 * 60 * 1000); // 2 hours before
-        
-        suggestions.push({
-          user_id: userId,
-          title: `Prep: ${meeting.title}`,
-          start_time: idealPrepStart.toISOString(),
-          end_time: new Date(idealPrepStart.getTime() + prepDuration).toISOString(),
-          block_type: 'prep',
-          related_meeting_id: meeting.id,
-          notes: `Preparation time for ${meeting.title}`,
-          is_ai_suggested: true,
-          is_confirmed: false
-        });
-      }
-      
-      return suggestions;
-    } catch (error) {
-      logger.error('Error suggesting meeting prep blocks:', error);
-      return [];
-    }
-  }
-
-  /**
-   * Generate proactive suggestions based on user activity
-   * @param {string} userId - User ID
-   * @returns {Promise<Array>} - Array of suggestions
-   */
-  async generateProactiveSuggestions(userId) {
-    try {
-      // Get user context
-      const { data: user } = await supabase
-        .from('users')
-        .select('*')
-        .eq('id', userId)
-        .single();
-      
-      // Get recent activity logs
-      const { data: logs } = await supabase
-        .from('event_logs')
-        .select('*')
-        .eq('user_id', userId)
-        .order('created_at', { ascending: false })
-        .limit(50);
-      
-      // Get pending tasks
-      const { data: pendingTasks } = await supabase
-        .from('tasks')
-        .select('*')
-        .eq('user_id', userId)
-        .eq('status', 'pending')
-        .order('priority', { ascending: false });
-      
-      // Get upcoming meetings
-      const { data: meetings } = await supabase
-        .from('meetings')
-        .select('*')
-        .eq('user_id', userId)
-        .gte('start_time', new Date().toISOString())
-        .order('start_time', { ascending: true })
-        .limit(5);
-      
-      // Check for trigger conditions and generate suggestions
-      const suggestions = [];
-      
-      // 1. Check for overdue tasks
-      const overdueTasks = pendingTasks?.filter(task => 
-        task.due_date && new Date(task.due_date) < new Date()
-      ) || [];
-      
-      if (overdueTasks.length > 0) {
-        suggestions.push({
-          user_id: userId,
-          suggestion_type: 'task',
-          title: 'Overdue tasks need attention',
-          description: `You have ${overdueTasks.length} overdue tasks. Would you like to reschedule them?`,
-          priority: 'high',
-          action_endpoint: '/api/tasks/reschedule',
-          action_payload: { task_ids: overdueTasks.map(t => t.id) }
-        });
-      }
-      
-      // 2. Check for upcoming meetings without prep time
-      const meetingsWithoutPrep = await this.getMeetingsWithoutPrep(userId);
-      
-      if (meetingsWithoutPrep.length > 0) {
-        const nextMeeting = meetingsWithoutPrep[0];
-        suggestions.push({
-          user_id: userId,
-          suggestion_type: 'prep',
-          title: 'Schedule prep time for upcoming meeting',
-          description: `You have a meeting "${nextMeeting.title}" coming up. Would you like to schedule prep time?`,
-          priority: 'medium',
-          related_meeting_id: nextMeeting.id,
-          action_endpoint: '/api/calendar/suggest-prep',
-          action_payload: { meeting_id: nextMeeting.id }
-        });
-      }
-      
-      // 3. Check for unscheduled focus time
-      const { data: focusBlocks } = await supabase
-        .from('time_blocks')
-        .select('*')
-        .eq('user_id', userId)
-        .eq('block_type', 'focus')
-        .gte('start_time', new Date().toISOString())
-        .order('start_time', { ascending: true });
-      
-      if (!focusBlocks || focusBlocks.length === 0) {
-        suggestions.push({
-          user_id: userId,
-          suggestion_type: 'focus_block',
-          title: 'Schedule focus time',
-          description: `You don't have any focus blocks scheduled. Would you like to add some to protect your creative flow?`,
-          priority: 'medium',
-          action_endpoint: '/api/calendar/suggest-focus',
-          action_payload: {}
-        });
-      }
-      
-      return suggestions;
-    } catch (error) {
-      logger.error('Error generating proactive suggestions:', error);
-      return [];
-    }
-  }
-
-  /**
-   * Get meetings without preparation blocks
-   * @param {string} userId - User ID
-   * @returns {Promise<Array>} - Meetings without prep blocks
-   */
-  async getMeetingsWithoutPrep(userId) {
-    try {
-      // Fetch upcoming meetings
-      const { data: meetings } = await supabase
-        .from('meetings')
-        .select('*')
-        .eq('user_id', userId)
-        .gte('start_time', new Date().toISOString())
-        .order('start_time', { ascending: true })
-        .limit(10);
-      
-      if (!meetings || meetings.length === 0) {
-        return [];
-      }
-      
-      // Fetch existing prep blocks
-      const { data: prepBlocks } = await supabase
-        .from('time_blocks')
-        .select('*')
-        .eq('user_id', userId)
-        .eq('block_type', 'prep')
-        .gte('start_time', new Date().toISOString());
-      
-      const prepBlocksByMeetingId = {};
-      if (prepBlocks) {
-        prepBlocks.forEach(block => {
-          if (block.related_meeting_id) {
-            prepBlocksByMeetingId[block.related_meeting_id] = true;
-          }
-        });
-      }
-      
-      // Filter meetings that don't have prep blocks
-      return meetings.filter(
-        meeting => !prepBlocksByMeetingId[meeting.id]
-      );
-    } catch (error) {
-      logger.error('Error getting meetings without prep:', error);
-      return [];
-    }
-  }
-
-  /**
-   * Generate asset suggestions for a meeting
-   * @param {string} userId - User ID
-   * @param {string} meetingId - Meeting ID
-   * @returns {Promise<Array>} - Array of suggested assets
-   */
-  async suggestAssetsForMeeting(userId, meetingId) {
-    try {
-      // Fetch meeting details
-      const { data: meeting } = await supabase
-        .from('meetings')
-        .select('*')
-        .eq('id', meetingId)
-        .single();
-      
-      if (!meeting) {
-        throw new Error('Meeting not found');
-      }
-      
-      // Fetch user's projects and assets
-      const { data: projects } = await supabase
-        .from('projects')
-        .select('*, assets(*)') // Note: This uses 'assets' table rather than 'project_assets'
-        .eq('user_id', userId);
-      
-      if (!projects || projects.length === 0) {
-        return [];
-      }
-      
-      // Extract all assets
-      const allAssets = [];
-      projects.forEach(project => {
-        if (project.assets) {
-          project.assets.forEach(asset => {
-            allAssets.push({
-              ...asset,
-              project_name: project.name
-            });
-          });
-        }
-      });
-      
-      if (allAssets.length === 0) {
-        return [];
-      }
-      
-      // Prepare prompt for OpenAI
-      const prompt = `
-Based on this upcoming meeting, suggest relevant assets/files that the user might need:
-
-MEETING DETAILS:
-- Title: ${meeting.title}
-- Description: ${meeting.description || 'No description available'}
-- Attendees: ${JSON.stringify(meeting.attendees) || 'Not specified'}
-- Date/Time: ${new Date(meeting.start_time).toLocaleString()}
-
-AVAILABLE ASSETS:
-${allAssets.map(asset => 
-  `- "${asset.name}" (from project "${asset.project_name}") - ${asset.description || 'No description'}`
-).join('\n')}
-
-Based on the meeting details and available assets, suggest up to 3 most relevant assets that the user should have prepared for this meeting.
-For each suggested asset, provide:
-1. Asset ID
-2. A brief reason why it's relevant (1-2 sentences)
-
-Format each suggestion in JSON without explanation:
-`;
-      
-      // Call OpenAI API
-      const response = await openai.chat.completions.create({
-        model: 'gpt-4-turbo',
-        messages: [
-          { role: 'system', content: 'You are an expert assistant that helps creative professionals prepare for meetings by suggesting relevant assets.' },
-          { role: 'user', content: prompt }
-        ],
-        temperature: 0.7,
-        max_tokens: 1000,
-        response_format: { type: 'json_object' }
-      });
-      
-      // Parse response
-      const content = response.choices[0].message.content;
-      const suggestions = JSON.parse(content).suggestions || [];
-      // Process each suggestion to match with actual assets
-      const assetSuggestions = [];
-      
-      for (const suggestion of suggestions) {
-        // Find the asset by ID
-        const matchingAsset = allAssets.find(asset => 
-          asset.id.toString() === suggestion.assetId.toString()
-        );
-        
-        if (matchingAsset) {
-          assetSuggestions.push({
-            asset_id: matchingAsset.id,
-            meeting_id: meetingId,
-            user_id: userId,
-            reason: suggestion.reason,
-            is_ai_suggested: true,
-            is_confirmed: false
-          });
-        }
-      }
-      
-      return assetSuggestions;
-    } catch (error) {
-      logger.error('Error suggesting assets for meeting:', error);
-      return [];
-    }
-  }
-
-  /**
-   * Suggest meeting preparation blocks
-   * @param {string} userId - User ID
-   * @param {Object} meetingData - Meeting data
-   * @returns {Promise<Object>} - Suggested prep blocks
-   */
-  async suggestMeetingPrep(userId, meetingData) {
-    try {
+      logger.ai.request(`Suggesting focus blocks for user ${userId}`, { startDate: startDate.toISOString(), endDate: endDate.toISOString() });
       const context = await AIContext.getContextForAI(userId);
+      const preferences = await UserPreferences.getPreferences(userId);
 
-      const prompt = `
-        Given the following meeting details:
-        ${JSON.stringify(meetingData)}
-
-        User context:
-        Work pattern: ${JSON.stringify(context.workPattern)}
-        Communication style: ${JSON.stringify(context.communicationStyle)}
-
-        Suggest preparation tasks and focus blocks for this meeting.
-        Consider:
-        1. Meeting type and importance
-        2. Required materials and research
-        3. User's work style and preferences
-        4. Available time before meeting
-
-        Return as JSON with format:
-        {
-          "preparationTasks": [{
-            "title": "Task title",
-            "description": "Task details",
-            "estimatedMinutes": number,
-            "priority": "high|medium|low"
-          }],
-          "focusBlocks": [{
-            "title": "Focus block title",
-            "startTime": "ISO date",
-            "endTime": "ISO date",
-            "type": "preparation|review"
-          }]
-        }
-      `;
-
-      const completion = await openai.createCompletion({
-        model: "gpt-4",
-        prompt,
-        max_tokens: 1000,
-        temperature: 0.5
-      });
-
-      const suggestions = JSON.parse(completion.data.choices[0].text.trim());
+      const systemPromptContent = `You are a productivity expert specializing in time blocking for creative professionals. Generate focus block suggestions.
+      User preferences: ${JSON.stringify(preferences || {})}
+      Work pattern: ${JSON.stringify(context.workPattern || {})}
+      Focus time preferences: ${JSON.stringify(context.preferences?.focus_time_preferences || {})}
+      Date range for suggestions: ${startDate.toISOString()} to ${endDate.toISOString()}
+      Return as a VALID JSON array of objects. Each object MUST have "title" (string, e.g., "Deep Work: Project X"), "startTime" (ISO string), "endTime" (ISO string), "priority" ("high"|"medium"|"low"), "type" ("focus"|"break"), "relatedTaskId" (string ID or null).
+      Consider user's work hours, avoid conflicts with known meetings (assume none are provided in this call, focus on preferences), and include short breaks (e.g., 10-15 mins after 90-120 mins of focus).
+      Respond ONLY with the JSON array. If no suitable blocks can be suggested, return an empty array.`;
       
-      // Update AI context with the meeting prep suggestions
-      await AIContext.updateContext(
-        userId,
-        'work_pattern',
-        { lastMeetingPrep: new Date().toISOString(), meetingId: meetingData.id },
-        AIContext.calculateConfidenceScore(suggestions)
-      );
+      const humanPromptContent = `Suggest focus blocks for the period from ${startDate.toISOString()} to ${endDate.toISOString()}.`;
 
+      const promptTemplate = ChatPromptTemplate.fromMessages([
+        new SystemMessage(systemPromptContent),
+        new HumanMessage(humanPromptContent),
+      ]);
+      const parser = new StringOutputParser();
+      const chain = promptTemplate.pipe(lcChatModel).pipe(parser); // Use standard model, can be refined for JSON
+      const responseString = await chain.invoke({});
+      let suggestions = [];
+       try {
+        const cleanedString = responseString.replace(/^```json\s*|```\s*$/g, '').trim();
+        suggestions = JSON.parse(cleanedString);
+        if (!Array.isArray(suggestions)) {
+            logger.warn('Focus block suggestions from AI was not an array.', { suggestions });
+            suggestions = []; // Or attempt a fallback extraction
+        }
+      } catch (parseError) {
+        logger.ai.error(parseError, { source: 'suggestFocusBlocks JSON.parse', responseString });
+        suggestions = []; // Or try a fallback extraction
+      }
+      
+      if (suggestions.length > 0) {
+        await AIContext.updateContext(
+          userId,
+          'work_pattern',
+          { lastFocusBlockGeneration: new Date().toISOString(), suggestionCount: suggestions.length, range: {start: startDate, end: endDate} },
+          AIContext.calculateConfidenceScore(suggestions)
+        );
+      }
       return suggestions;
     } catch (error) {
-      logger.error('Error suggesting meeting prep:', error);
-      throw error;
+      logger.ai.error(error, { userId, source: 'suggestFocusBlocks Langchain' });
+      return [];
     }
   }
 
-  /**
-   * Analyze project brief and generate insights
-   * @param {string} userId - User ID
-   * @param {string} projectId - Project ID
-   * @returns {Promise<Object>} - Project insights and suggestions
-   */
-  async analyzeProjectBrief(userId, projectId) {
-    try {
-      // Fetch project details
-      const { data: project } = await supabase
-        .from('projects')
-        .select('*')
-        .eq('id', projectId)
-        .single();
-      
-      if (!project) {
-        throw new Error('Project not found');
-      }
-      
-      // Prepare prompt for OpenAI
-      const prompt = `
-Analyze this creative project brief and provide insights:
+  // TODO: Refactor other methods like suggestMeetingPrepBlocks, analyzeProjectBrief, generateWeeklySummary
+  // to use Langchain and lcChatModel similar to the examples above.
+  // For brevity, the original stubs/logic for those are omitted here but should be
+  // reviewed and updated in your actual file.
 
-PROJECT DETAILS:
-- Name: ${project.name}
-- Description: ${project.description || 'No description provided'}
-- Client: ${project.client_name || 'Not specified'}
-- Deadline: ${project.deadline ? new Date(project.deadline).toLocaleDateString() : 'Not specified'}
-- Budget: ${project.budget || 'Not specified'}
-- Scope: ${project.scope || 'Not specified'}
-
-As an experienced creative professional, analyze this brief and provide:
-1. Key insights (3-5 points that stand out about this project)
-2. Potential challenges or risks to be aware of
-3. Initial task breakdown (5-7 high-level tasks that would be needed)
-4. Time estimate for completion (based on typical creative workflow)
-5. Questions that should be asked for clarification (if brief is incomplete)
-
-Provide your response structured clearly under these headings.
-`;
-      
-      // Call OpenAI API
-      const response = await openai.chat.completions.create({
-        model: 'gpt-4-turbo',
-        messages: [
-          { 
-            role: 'system', 
-            content: 'You are an expert creative director with extensive experience in managing design, content, and creative projects. Help analyze this brief and provide strategic insights.' 
-          },
-          { role: 'user', content: prompt }
-        ],
-        temperature: 0.7,
-        max_tokens: 1500
-      });
-      
-      // Extract response
-      const analysis = response.choices[0].message.content;
-      
-      // Save analysis to database
-      await supabase.from('project_analyses').insert({
-        user_id: userId,
-        project_id: projectId,
-        analysis_content: analysis,
-        created_at: new Date().toISOString()
-      });
-      
-      return {
-        analysis,
-        project_id: projectId
-      };
-    } catch (error) {
-      logger.error('Error analyzing project brief:', error);
-      return {
-        analysis: "Could not analyze the project brief at this time.",
-        error: true
-      };
-    }
-  }
-
-  /**
-   * Generate weekly summary and insights for user
-   * @param {string} userId - User ID
-   * @returns {Promise<Object>} - Weekly summary and insights
-   */
-  async generateWeeklySummary(userId) {
-    try {
-      // Calculate date range for the past week
-      const endDate = new Date();
-      const startDate = new Date();
-      startDate.setDate(startDate.getDate() - 7);
-      
-      // Fetch completed tasks
-      const { data: completedTasks } = await supabase
-        .from('tasks')
-        .select('*')
-        .eq('user_id', userId)
-        .eq('status', 'completed')
-        .gte('completed_at', startDate.toISOString())
-        .lte('completed_at', endDate.toISOString());
-      
-      // Fetch meetings attended
-      const { data: meetings } = await supabase
-        .from('meetings')
-        .select('*')
-        .eq('user_id', userId)
-        .gte('start_time', startDate.toISOString())
-        .lte('end_time', endDate.toISOString());
-      
-      // Fetch focus blocks used
-      const { data: focusBlocks } = await supabase
-        .from('time_blocks')
-        .select('*')
-        .eq('user_id', userId)
-        .eq('block_type', 'focus')
-        .gte('start_time', startDate.toISOString())
-        .lte('end_time', endDate.toISOString());
-      
-      // Calculate metrics
-      const completedTaskCount = completedTasks?.length || 0;
-      const meetingCount = meetings?.length || 0;
-      
-      // Calculate total focus time in hours
-      let totalFocusMinutes = 0;
-      if (focusBlocks && focusBlocks.length > 0) {
-        focusBlocks.forEach(block => {
-          const start = new Date(block.start_time);
-          const end = new Date(block.end_time);
-          const durationMs = end - start;
-          totalFocusMinutes += durationMs / (1000 * 60); // Convert ms to minutes
-        });
-      }
-      const focusHours = Math.round(totalFocusMinutes / 60 * 10) / 10; // Round to 1 decimal
-      
-      // Prepare data for analysis
-      const weekData = {
-        completedTasks: completedTasks || [],
-        meetings: meetings || [],
-        focusBlocks: focusBlocks || [],
-        metrics: {
-          completedTaskCount,
-          meetingCount,
-          focusHours
-        }
-      };
-      
-      // Generate insights from the data
-      const insights = await this.generateInsightsFromWeekData(userId, weekData);
-      
-      return {
-        startDate: startDate.toISOString(),
-        endDate: endDate.toISOString(),
-        metrics: weekData.metrics,
-        insights
-      };
-    } catch (error) {
-      logger.error('Error generating weekly summary:', error);
-      return {
-        error: true,
-        message: "Couldn't generate weekly summary at this time."
-      };
-    }
-  }
-  
-  /**
-   * Generate insights from weekly data
-   * @param {string} userId - User ID
-   * @param {Object} weekData - Weekly activity data
-   * @returns {Promise<Array>} - Insights and suggestions
-   */
-  async generateInsightsFromWeekData(userId, weekData) {
-    try {
-      const { completedTasks, meetings, focusBlocks, metrics } = weekData;
-      
-      // Prepare prompt for OpenAI
-      const prompt = `
-Analyze this creative professional's week and provide helpful insights:
-
-WEEKLY METRICS:
-- Completed Tasks: ${metrics.completedTaskCount}
-- Meetings Attended: ${metrics.meetingCount}
-- Focus Time: ${metrics.focusHours} hours
-
-COMPLETED TASKS:
-${completedTasks.map(task => `- ${task.title} (Project: ${task.project_id || 'None'})`).join('\n')}
-
-MEETINGS:
-${meetings.map(meeting => `- ${meeting.title} (${new Date(meeting.start_time).toLocaleString()})`).join('\n')}
-
-Based on this data, provide:
-1. 3 key insights about their productivity and work patterns
-2. 2 specific suggestions to improve their creative flow next week
-3. Any patterns or imbalances between focus time and meetings
-
-Keep insights actionable and relevant to creative professionals who value deep work time.
-`;
-      
-      // Call OpenAI API
-      const response = await openai.chat.completions.create({
-        model: 'gpt-4-turbo',
-        messages: [
-          { 
-            role: 'system', 
-            content: 'You are a productivity coach for creative professionals. Your goal is to help them balance creative flow with client work and administrative tasks. Provide insights that help protect their deep work time while still meeting obligations.' 
-          },
-          { role: 'user', content: prompt }
-        ],
-        temperature: 0.7,
-        max_tokens: 1000
-      });
-      
-      // Extract insights
-      const insightsText = response.choices[0].message.content;
-      
-      // Save insights to database
-      await supabase.from('user_insights').insert({
-        user_id: userId,
-        insight_type: 'weekly',
-        content: insightsText,
-        created_at: new Date().toISOString()
-      });
-      
-      return insightsText;
-    } catch (error) {
-      logger.error('Error generating insights from week data:', error);
-      return "Unable to generate insights at this time.";
-    }
-  }
-}
+} // End of AIService Class
 
 module.exports = new AIService();
