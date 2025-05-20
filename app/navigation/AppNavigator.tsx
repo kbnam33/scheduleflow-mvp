@@ -45,5 +45,6 @@ const AppNavigator = () => {
     </NavigationContainer>
   );
 };
+// git change..
 
 export default AppNavigator;

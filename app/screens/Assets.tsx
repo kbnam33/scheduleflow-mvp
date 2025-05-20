@@ -163,6 +163,6 @@ const styles = StyleSheet.create({
   navLabel: { color: '#666', fontSize: 12, fontWeight: '500', marginTop: 4 },
   navLabelActive: { color: '#fff', fontSize: 12, fontWeight: '500', marginTop: 4 },
 });
-// git change.
+// git change..
 
 export default AssetsScreen; 

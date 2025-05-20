@@ -185,5 +185,6 @@ router.post('/email/process', async (req, res) => {
 // NOTE: /api/ai/meeting/prep-suggestions and /api/ai/gmail/fetch-recent-emails
 // have been removed as direct Gmail API integration is deferred.
 // We can add back meeting prep suggestions if it doesn't rely on direct email fetching for context.
+// git change..
 
 module.exports = router;

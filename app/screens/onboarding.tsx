@@ -269,5 +269,6 @@ const styles = StyleSheet.create({
   },
   nextText: { color: '#121212', fontSize: 16, fontWeight: '600' },
 });
+// git change..
 
 export default Onboarding;
