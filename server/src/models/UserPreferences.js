@@ -8,13 +8,25 @@ class UserPreferences {
         .from('user_preferences')
         .select('*')
         .eq('user_id', userId)
-        .single();
+        .maybeSingle(); // Use maybeSingle() instead of single()
 
-      if (error) throw error;
-      return data;
+      if (error && error.code !== 'PGRST116') { // PGRST116 means 0 rows, which maybeSingle handles by returning null data
+        logger.error('Error fetching user preferences:', { userId, code: error.code, message: error.message });
+        throw error;
+      }
+      // If data is null (no row found), return a default structure or null
+      // The calling function (AIContext.getContextForAI) should handle this
+      return data || { 
+        /* provide a structure with all expected keys, possibly with default values */
+        work_hours: this.getDefaultWorkHours(),
+        notification_preferences: this.getDefaultNotificationPreferences(),
+        focus_time_preferences: this.getDefaultFocusTimePreferences(),
+        theme: 'dark' // example default
+        // Ensure all fields expected by AIContext.getContextForAI are present
+      };
     } catch (error) {
-      logger.error('Error fetching user preferences:', error);
-      throw error;
+      logger.error('Critical error fetching user preferences:', { userId, message: error.message });
+      throw error; // Re-throw if it's an unexpected error
     }
   }
 

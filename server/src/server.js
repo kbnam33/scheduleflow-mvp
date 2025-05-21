@@ -3,10 +3,12 @@ const app = require('./app');
 const logger = require('./utils/logger');
 
 const PORT = process.env.PORT || 3000;
+const HOST = '0.0.0.0'; // Listen on all available network interfaces
 
 // Start server
-const server = app.listen(PORT, () => {
+const server = app.listen(PORT, HOST, () => { // Added HOST here
   logger.info(`Server started on port ${PORT}`, {
+    host: HOST, // Added for logging
     environment: process.env.NODE_ENV || 'development',
     nodeVersion: process.version
   });

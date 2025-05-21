@@ -1,13 +1,6 @@
-// In auth.js
+// server/src/middleware/auth.js
 const jwt = require('jsonwebtoken');
-const { createClient } = require('@supabase/supabase-js');
 const logger = require('../utils/logger');
-
-// Create a Supabase client for JWT verification
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_KEY
-);
 
 class AuthError extends Error {
   constructor(message, status = 401) {
@@ -17,70 +10,86 @@ class AuthError extends Error {
   }
 }
 
+const validateToken = (token) => {
+  if (!token) {
+    throw new AuthError('No token provided');
+  }
+  if (typeof token !== 'string') {
+    throw new AuthError('Invalid token format');
+  }
+  return token;
+};
+
 const authMiddleware = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
     
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      throw new AuthError('No token provided');
+      throw new AuthError('No token provided or Bearer scheme missing');
     }
+
+    const token = validateToken(authHeader.split(' ')[1]);
     
-    const token = authHeader.split(' ')[1];
-    
-    // Special handling for test environment
-    if (process.env.NODE_ENV === 'test' && token === 'test-token') {
+    // REASONING: Using a valid UUID for test-user-id to match Supabase schema.
+    // Replace 'YOUR_VALID_TEST_USER_UUID_HERE' with an actual UUID from your users table.
+    const actualTestUserId = '5d02f972-ecd0-45ac-a3e4-b09fa7a56bd6'; // <--- PASTE YOUR GENERATED UUID HERE
+
+    if ((process.env.NODE_ENV === 'test' || process.env.NODE_ENV === 'development') && token === 'test-token') {
       req.user = { 
-        id: 'test-user-id', 
-        email: 'test@example.com',
+        id: actualTestUserId, // <--- USE THE VARIABLE HERE
+        email: 'test@example.com', // You can adjust this if needed
         role: 'authenticated'
       };
+      logger.info('Using test-token for development/test environment', { userId: req.user.id, path: req.path });
       return next();
     }
 
     try {
-      // Verify using Supabase's JWT approach
-      const { data: { user }, error } = await supabase.auth.getUser(token);
-      
-      if (error) {
-        throw new AuthError('Invalid token');
+      if (!process.env.JWT_SECRET) {
+        logger.error('JWT_SECRET is not defined in environment variables.');
+        throw new AuthError('Authentication configuration error', 500);
       }
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
       
-      if (!user) {
-        throw new AuthError('User not found');
+      if (!decoded.sub || !decoded.role) {
+        throw new AuthError('Invalid token structure');
       }
-      
+
       req.user = {
-        id: user.id,
-        email: user.email,
-        role: 'authenticated'
+        id: decoded.sub,
+        email: decoded.email,
+        role: decoded.role
       };
       
       next();
     } catch (error) {
-      if (error instanceof AuthError) {
-        throw error;
+      if (error instanceof AuthError) throw error;
+
+      if (error instanceof jwt.TokenExpiredError) {
+        throw new AuthError('Token expired', 401);
       }
-      throw new AuthError('Authentication failed');
+      if (error instanceof jwt.JsonWebTokenError) {
+        logger.warn('JWT Verification Error', { error: error.message, tokenUsed: token ? 'Exists' : 'Not provided', path: req.path });
+        throw new AuthError('Invalid token', 401);
+      }
+      throw error;
     }
   } catch (error) {
+    const logDetails = {
+      errorMessage: error.message,
+      errorStatus: error.status,
+      errorName: error.name,
+      ip: req.ip,
+      path: req.path
+    };
     if (error instanceof AuthError) {
-      logger.warn('Authentication failed', {
-        error: error.message,
-        ip: req.ip,
-        path: req.path
-      });
+      logger.warn('Authentication failed', logDetails);
       return res.status(error.status).json({ error: error.message });
     }
 
-    logger.error('Auth middleware error', {
-      error: error.message,
-      stack: error.stack,
-      ip: req.ip,
-      path: req.path
-    });
-    
-    return res.status(500).json({ error: 'Internal server error' });
+    logger.error('Critical auth middleware error', { ...logDetails, stack: error.stack });
+    return res.status(500).json({ error: 'Internal server error during authentication' });
   }
 };
-// git change..
+
 module.exports = authMiddleware;
