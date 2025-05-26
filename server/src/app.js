@@ -1,27 +1,28 @@
-// scheduleflow-mvp/server/src/app.js
-
+// server/src/app.js
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
-const morgan = 'morgan'; // This was a string, should be: const morgan = require('morgan');
+const morgan = 'production' === process.env.NODE_ENV ? null : require('morgan');
 const rateLimit = require('express-rate-limit');
 const logger = require('./utils/logger');
 const authMiddleware = require('./middleware/auth');
 
 // Import routes
+const authRoutes = require('./routes/auth'); 
 const chatRoutes = require('./routes/chat');
 const taskRoutes = require('./routes/tasks');
 const calendarRoutes = require('./routes/calendar');
-const emailRoutes = require('./routes/email'); // For processing pasted email text
+const emailRoutes = require('./routes/email');
 const aiRoutes = require('./routes/ai');
-// const googleAuthRoutes = require('./routes/googleAuthRoutes'); // DEFERRED for MVP
+const userRoutes = require('./routes/user'); // Correctly imported
 
+// Create Express app
 const app = express();
 
 app.use(helmet());
 app.use(cors({
   origin: process.env.CORS_ORIGIN || '*',
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true
 }));
@@ -29,19 +30,15 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Corrected Morgan import
-const actualMorgan = require('morgan');
-app.use(actualMorgan('combined', {
-  stream: {
-    write: (message) => {
-      if (typeof logger.info === 'function') {
-        logger.info(message.trim());
-      } else {
-        console.log(message.trim());
-      }
-    }
-  },
-}));
+if (morgan) {
+    app.use(morgan('dev', {
+        stream: {
+            write: (message) => {
+            logger.info(message.trim());
+            }
+        }
+    }));
+}
 
 app.use((req, res, next) => {
   req.startTime = Date.now();
@@ -49,81 +46,71 @@ app.use((req, res, next) => {
 });
 
 app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
+  res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// app.use('/api/auth', googleAuthRoutes); // DEFERRED for MVP - Google OAuth specific routes
+app.use('/api/auth', authRoutes);
 
 const apiRateLimiter = rateLimit({
-  windowMs: process.env.NODE_ENV === 'test' ? 1000 : 15 * 60 * 1000,
-  max: process.env.NODE_ENV === 'test' ? 100 : 100, // Allow more for testing locally
-  message: { error: 'Too many requests from this IP, please try again later.' },
+  windowMs: process.env.NODE_ENV === 'test' ? 1000 : 15 * 60 * 1000, 
+  max: process.env.NODE_ENV === 'test' ? 100 : 100,
+  message: { error: 'Too many requests, please try again later.' },
   standardHeaders: true,
   legacyHeaders: false,
-  skip: (req) => process.env.NODE_ENV === 'test' && !req.headers['x-test-ratelimit'],
-  keyGenerator: (req) => req.user?.id || req.ip,
+  skip: (req) => {
+    if (process.env.NODE_ENV === 'test' && !req.headers['x-test-ratelimit']) return true;
+    if (req.path === '/health' || req.path.startsWith('/api/auth')) return true;
+    return false;
+  },
+  keyGenerator: (req) => req.user ? req.user.id : req.ip,
   handler: (req, res) => {
-    logger.warn('Rate limit exceeded', {
-      ip: req.ip,
-      userId: req.user?.id,
-      path: req.path
-    });
+    logger.warn('Rate limit exceeded', { ip: req.ip, userId: req.user?.id, path: req.path });
     res.status(429).json({ error: 'Too many requests, please try again later.' });
   }
 });
 
 app.use('/api', apiRateLimiter);
+app.use('/api', authMiddleware); 
 
-const protectedApiRouter = express.Router();
-protectedApiRouter.use(authMiddleware);
-
-protectedApiRouter.use('/chat', chatRoutes);
-protectedApiRouter.use('/tasks', taskRoutes);
-protectedApiRouter.use('/calendar', calendarRoutes);
-protectedApiRouter.use('/email', emailRoutes); // For processing pasted/described email text
-protectedApiRouter.use('/ai', aiRoutes);
-
-app.use('/api', protectedApiRouter);
+// Protected API routes
+app.use('/api/chat', chatRoutes);
+app.use('/api/tasks', taskRoutes);
+app.use('/api/calendar', calendarRoutes);
+app.use('/api/email', emailRoutes);
+app.use('/api/ai', aiRoutes);
+// REASONING: Mounting userRoutes at /api/users to match frontend call /api/users/me/preferences
+app.use('/api/users', userRoutes); 
 
 app.use((err, req, res, next) => {
   if (err.name === 'ValidationError') {
-    logger.warn('Validation Error:', { message: err.message, details: err.details, path: req.path });
-    return res.status(400).json({
-      error: 'Validation Error',
-      details: err.details || err.message
-    });
+    logger.warn('Validation Error', { error: err.message, path: req.path, details: err.details });
+    return res.status(400).json({ error: 'Validation Error', details: err.message });
   }
   next(err);
 });
 
 app.use((err, req, res, next) => {
-  const requestDuration = req.startTime ? Date.now() - req.startTime : 'N/A';
-  logger.error('Unhandled error in Express:', {
-    error_message: err.message,
-    error_stack: err.stack,
-    error_status: err.status,
-    request_path: req.path,
-    request_method: req.method,
-    duration_ms: requestDuration,
-    user_id: req.user?.id,
-    ip_address: req.ip
+  const duration = Date.now() - (req.startTime || Date.now());
+  logger.error('Unhandled error caught by general error handler', {
+    error: err.message, status: err.status,
+    stack: process.env.NODE_ENV === 'development' ? err.stack : undefined,
+    path: req.path, method: req.method, duration, userId: req.user?.id, ip: req.ip
   });
   const errorResponse = {
-    error: 'Internal Server Error',
-    message: (process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'test') ? err.message : 'An unexpected error occurred.',
-    ...((process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'test') && { stack: err.stack })
+    error: err.message || 'Internal server error',
+    ...(process.env.NODE_ENV === 'development' && { messageDetails: err.message })
   };
   res.status(err.status || 500).json(errorResponse);
 });
 
-app.use((req, res, next) => {
-  logger.warn('Route not found (404):', {
-    path: req.originalUrl,
-    method: req.method,
-    ip: req.ip,
-    userId: req.user?.id
-  });
-  res.status(404).json({ error: 'Not Found', message: `The requested route ${req.originalUrl} does not exist.` });
+app.use('/api', (req, res) => {
+  logger.warn('API Route not found', { path: req.path, method: req.method, ip: req.ip, userId: req.user?.id });
+  res.status(404).json({ error: 'API route not found' });
+});
+
+app.use((req, res) => {
+    logger.warn('Non-API Route not found', { path: req.path, method: req.method, ip: req.ip });
+    res.status(404).send('Resource not found');
 });
 
 module.exports = app;
