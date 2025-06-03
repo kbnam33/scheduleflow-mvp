@@ -8,6 +8,10 @@ import { getOpenAIClient, SOP_PROMPTS } from '../../app/lib/openai';
 // Load environment variables
 dotenv.config();
 
+
+console.log("server/src/index.ts - This file is no longer the primary server entry point or cron job runner.");
+console.log("Server is started via 'node src/server.js'.");
+console.log("Cron worker is started via 'node src/worker.js'.");
 const app = express();
 
 // Middleware
