@@ -28,7 +28,7 @@
     "jsonwebtoken": "^9.0.2",
     "morgan": "^1.10.0",
     "node-cron": "^4.0.0",
-    "openai": "^4.98.0",
+    "openai": "^4.103.0",
     "winston": "^3.17.0",
     "winston-daily-rotate-file": "^5.0.0"
   },

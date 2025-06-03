@@ -32,7 +32,7 @@ type OnboardingNavigationProp = NativeStackNavigationProp<RootStackParamList, 'O
 // if testing on an Android emulator or a physical device.
 // Example for Android Emulator/Device: const API_BASE_URL = 'http://192.168.1.X:3001/api';
 // Example for iOS Simulator: const API_BASE_URL = 'http://localhost:3001/api';
-const API_BASE_URL = 'http://192.168.1.5:3001/api'; // Using the IP you confirmed
+const API_BASE_URL = 'https://c0cd-115-99-79-183.ngrok-free.app/api'; // Using the IP you confirmed
 
 type Step = 0 | 1 | 2 | 3 | 4;
 const TOTAL_STEPS = 5; // Sign up (0) + Role (1) + Calendar (2) + Video (3) + Creative Hours (4)
